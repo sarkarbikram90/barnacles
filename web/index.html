@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Barnacles - Real-Time Distributed Log Aggregation Dashboard">
+  <title>Barnacles — Distributed Log Aggregator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="dashboard-header">
+      <div class="brand-section">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">Barnacles</h1>
+          <span class="brand-subtitle">Distributed Log Aggregator</span>
+        </div>
+      </div>
+
+      <!-- Stats Bar -->
+      <div class="stats-bar">
+        <div class="stat-card">
+          <span class="stat-label">STATUS</span>
+          <div class="stat-value-group">
+            <span class="status-indicator status-disconnected" id="conn-indicator"></span>
+            <span class="stat-value" id="conn-status">Connecting...</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <span class="stat-label">AGENTS</span>
+          <span class="stat-value stat-highlight" id="agent-count">0</span>
+        </div>
+
+        <div class="stat-card">
+          <span class="stat-label">RATE</span>
+          <div class="stat-value-group">
+            <span class="stat-value stat-highlight" id="event-rate">0</span>
+            <span class="stat-unit">evt/s</span>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <span class="stat-label">TOTAL LOGS</span>
+          <span class="stat-value" id="total-events">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Filter & Control Toolbar -->
+    <div class="toolbar">
+      <div class="filter-group">
+        <div class="input-wrapper search-wrapper">
+          <svg class="input-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="search-input" placeholder="Search message or fields..." />
+        </div>
+
+        <div class="input-wrapper">
+          <select id="level-select">
+            <option value="">All Levels</option>
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARN">WARN</option>
+            <option value="ERROR">ERROR</option>
+            <option value="FATAL">FATAL</option>
+          </select>
+        </div>
+
+        <div class="input-wrapper">
+          <input type="text" id="host-input" placeholder="Filter Host..." list="hosts-list" />
+          <datalist id="hosts-list"></datalist>
+        </div>
+
+        <div class="input-wrapper">
+          <input type="text" id="source-input" placeholder="Filter Source..." list="sources-list" />
+          <datalist id="sources-list"></datalist>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <button id="btn-pause" class="btn btn-secondary" title="Pause / Resume stream">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" id="pause-icon">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+          </svg>
+          <span id="pause-text">Pause</span>
+        </button>
+
+        <button id="btn-autoscroll" class="btn btn-secondary active" title="Toggle Auto-scroll">
+          <span>Auto-scroll</span>
+        </button>
+
+        <button id="btn-query" class="btn btn-primary" title="Fetch stored logs">
+          <span>Fetch Historical</span>
+        </button>
+
+        <button id="btn-clear" class="btn btn-danger" title="Clear table view">
+          <span>Clear</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Log Stream Table -->
+    <main class="log-viewport">
+      <div class="table-container">
+        <table class="log-table" id="log-table">
+          <thead>
+            <tr>
+              <th style="width: 190px;">TIMESTAMP</th>
+              <th style="width: 90px;">LEVEL</th>
+              <th style="width: 140px;">HOST</th>
+              <th style="width: 140px;">SOURCE</th>
+              <th>MESSAGE</th>
+              <th style="width: 80px;">DETAILS</th>
+            </tr>
+          </thead>
+          <tbody id="log-body">
+            <!-- Dynamically populated rows -->
+          </tbody>
+        </table>
+        <div class="empty-state" id="empty-state">
+          <p>No log events matched current filter. Waiting for incoming streams...</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- Details Modal -->
+    <div class="modal-overlay" id="detail-modal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Log Event Details</h3>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <pre id="modal-json-content"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

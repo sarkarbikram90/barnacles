@@ -1,0 +1,49 @@
+services:
+  barnacles-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/app/barnacles-server", "-config", "/app/config/server.yaml"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/logs:/app/data/logs
+      - ./config/server.yaml:/app/config/server.yaml:ro
+    environment:
+      - BARNACLES_AUTH_TOKEN=secret-demo-token
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  barnacles-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/app/barnacles-agent", "-config", "/app/config/agent.yaml"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./data/demo:/data/demo:ro
+      - ./data/agent-spool:/app/data/agent-spool
+      - ./config/agent.yaml:/app/config/agent.yaml:ro
+    environment:
+      - BARNACLES_SERVER_URL=http://barnacles-server:8080
+      - BARNACLES_AGENT_ID=docker-agent-01
+      - BARNACLES_AUTH_TOKEN=secret-demo-token
+    depends_on:
+      barnacles-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  log-generator:
+    image: alpine:3.21
+    volumes:
+      - ./data/demo:/data/demo
+      - ./scripts/generate-logs.sh:/scripts/generate-logs.sh:ro
+    command: ["/bin/sh", "-c", "apk add --no-cache bash && bash /scripts/generate-logs.sh"]
+    depends_on:
+      - barnacles-server
+    restart: unless-stopped

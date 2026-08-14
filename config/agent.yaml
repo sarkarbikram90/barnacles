@@ -1,0 +1,45 @@
+# Barnacles Agent Configuration
+agent:
+  id: ${BARNACLES_AGENT_ID:-agent-01}
+  host: ${BARNACLES_AGENT_HOST:-node-01}
+  metrics_address: ":9090"
+
+server:
+  url: ${BARNACLES_SERVER_URL:-http://localhost:8080}
+  token: ${BARNACLES_AUTH_TOKEN:-}
+  timeout: 10s
+  insecure_skip_verify: false
+
+batch:
+  max_events: 500
+  flush_interval: 1s
+  max_queue_events: 5000
+
+retry:
+  initial_backoff: 1s
+  max_backoff: 30s
+  backoff_multiplier: 2.0
+  max_retries: 0 # infinite retry with backoff for retryable network outages
+
+spool:
+  enabled: true
+  directory: "./data/agent-spool"
+  max_size_mb: 1024 # 1GB
+  max_batch_events: 500
+
+sources:
+  - name: demo-app
+    path: "./data/demo/app.log"
+    format: auto
+    start_position: beginning
+    tags:
+      environment: development
+      service: demo-service
+
+  - name: system-access
+    path: "./data/demo/access.log"
+    format: json
+    start_position: beginning
+    tags:
+      environment: development
+      service: gateway

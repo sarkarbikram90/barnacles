@@ -1,0 +1,25 @@
+[Unit]
+Description=Barnacles Central Log Server
+Documentation=https://github.com/sarkarbikram90/barnacles
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=barnacles
+Group=barnacles
+ExecStart=/usr/local/bin/barnacles-server -config /etc/barnacles/server.yaml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+KillMode=mixed
+TimeoutStopSec=10s
+
+# Security Hardening
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
