@@ -63,10 +63,10 @@ type TLSSettings struct {
 
 // IngestSettings configures batch ingestion rules and idempotency dedup.
 type IngestSettings struct {
-	MaxBatchEvents int           `yaml:"max_batch_events"`
-	MaxMessageBytes int          `yaml:"max_message_bytes"`
-	DedupWindow    time.Duration `yaml:"dedup_window"`
-	DedupCapacity  int           `yaml:"dedup_capacity"`
+	MaxBatchEvents  int           `yaml:"max_batch_events"`
+	MaxMessageBytes int           `yaml:"max_message_bytes"`
+	DedupWindow     time.Duration `yaml:"dedup_window"`
+	DedupCapacity   int           `yaml:"dedup_capacity"`
 }
 
 // StorageSettings configures filesystem log persistence.
@@ -175,12 +175,12 @@ func (c *ServerConfig) Validate() error {
 
 // AgentConfig defines the configuration for a running Barnacles Agent.
 type AgentConfig struct {
-	Agent   AgentSettings   `yaml:"agent"`
-	Server  ServerTarget    `yaml:"server"`
-	Batch   BatchSettings   `yaml:"batch"`
-	Retry   RetrySettings   `yaml:"retry"`
-	Spool   SpoolSettings   `yaml:"spool"`
-	Sources []SourceConfig  `yaml:"sources"`
+	Agent   AgentSettings  `yaml:"agent"`
+	Server  ServerTarget   `yaml:"server"`
+	Batch   BatchSettings  `yaml:"batch"`
+	Retry   RetrySettings  `yaml:"retry"`
+	Spool   SpoolSettings  `yaml:"spool"`
+	Sources []SourceConfig `yaml:"sources"`
 }
 
 // AgentSettings configures agent identification and metrics.

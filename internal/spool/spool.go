@@ -26,13 +26,13 @@ var (
 
 // Spool manages local disk persistence for unsent log batches.
 type Spool struct {
-	dir         string
+	dir          string
 	maxSizeBytes int64
-	mu          sync.Mutex
-	closed      bool
-	currentSize int64
-	totalEvents int
-	files       []spoolFile
+	mu           sync.Mutex
+	closed       bool
+	currentSize  int64
+	totalEvents  int
+	files        []spoolFile
 }
 
 type spoolFile struct {
