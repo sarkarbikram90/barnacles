@@ -28,7 +28,9 @@ bench:
 	go test -bench=. -benchmem ./...
 
 fuzz:
-	go test -fuzz=Fuzz -fuzztime=5s ./internal/parser
+	go test -fuzz=^FuzzJSONParser$$ -fuzztime=3s ./internal/parser
+	go test -fuzz=^FuzzRegexpParser$$ -fuzztime=3s ./internal/parser
+	go test -fuzz=^FuzzAutoParser$$ -fuzztime=3s ./internal/parser
 
 run-server:
 	go run ./cmd/barnacles-server -config ./config/server.yaml

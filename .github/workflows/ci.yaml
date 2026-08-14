@@ -58,8 +58,11 @@ jobs:
       - name: Run Benchmarks
         run: go test -bench=. -benchmem ./...
 
-      - name: Run Parser Fuzz Smoke Test
-        run: go test -fuzz=Fuzz -fuzztime=5s ./internal/parser
+      - name: Run Parser Fuzz Smoke Tests
+        run: |
+          go test -fuzz=^FuzzJSONParser$ -fuzztime=3s ./internal/parser
+          go test -fuzz=^FuzzRegexpParser$ -fuzztime=3s ./internal/parser
+          go test -fuzz=^FuzzAutoParser$ -fuzztime=3s ./internal/parser
 
   build:
     name: Build Binaries

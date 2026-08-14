@@ -162,7 +162,7 @@ go vet ./...
 go test -bench=. -benchmem ./...
 
 # Run parser fuzz smoke tests
-go test -fuzz=Fuzz -fuzztime=5s ./internal/parser
+go test -fuzz=^FuzzJSONParser$ -fuzztime=5s ./internal/parser
 ```
 
 ---
