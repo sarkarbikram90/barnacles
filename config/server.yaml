@@ -1,6 +1,6 @@
 # Barnacles Server Configuration
 server:
-  address: ":8080"
+  address: ":8088"
   read_header_timeout: 5s
   read_timeout: 15s
   write_timeout: 15s

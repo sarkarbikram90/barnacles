@@ -5,7 +5,7 @@ agent:
   metrics_address: ":9090"
 
 server:
-  url: ${BARNACLES_SERVER_URL:-http://localhost:8080}
+  url: ${BARNACLES_SERVER_URL:-http://localhost:8088}
   token: ${BARNACLES_AUTH_TOKEN:-}
   timeout: 10s
   insecure_skip_verify: false
