@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Barnacles - Real-Time Distributed Log Aggregation Dashboard">
+  <meta name="description" content="Barnacles - Real-Time Distributed Log Aggregation & Observability Dashboard">
   <title>Barnacles — Distributed Log Aggregator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="logo.png">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
   <div class="app-container">
-    <!-- Header -->
+    <!-- Top Header -->
     <header class="dashboard-header">
       <div class="brand-section">
-        <div class="logo-icon" title="Barnacles" style="width: 38px; height: 38px; min-width: 38px; flex-shrink: 0;">
-          <img src="logo.png" width="38" height="38" alt="Barnacles Logo" class="brand-logo-img" style="width: 38px; height: 38px; object-fit: cover; border-radius: 8px; display: block;">
+        <div class="logo-icon" title="Barnacles">
+          <img src="logo.png" width="38" height="38" alt="Barnacles Logo" class="brand-logo-img">
         </div>
         <div>
           <h1 class="brand-title">Barnacles</h1>
@@ -25,9 +25,9 @@
         </div>
       </div>
 
-      <!-- Stats Bar -->
+      <!-- Header Operational Telemetry Cards -->
       <div class="stats-bar">
-        <div class="stat-card">
+        <div class="stat-card" title="WebSocket Connection Status">
           <span class="stat-label">STATUS</span>
           <div class="stat-value-group">
             <span class="status-indicator status-disconnected" id="conn-indicator"></span>
@@ -35,39 +35,89 @@
           </div>
         </div>
 
-        <div class="stat-card">
+        <div class="stat-card" title="Active Distinct Ingestion Agents">
           <span class="stat-label">AGENTS</span>
-          <span class="stat-value stat-highlight" id="agent-count">0</span>
+          <div class="stat-value-group">
+            <span class="stat-value stat-highlight" id="agent-count">0</span>
+            <span class="stat-unit">active</span>
+          </div>
         </div>
 
-        <div class="stat-card">
-          <span class="stat-label">RATE</span>
+        <div class="stat-card" title="Real-Time Event Ingestion Throughput">
+          <span class="stat-label">INGEST RATE</span>
           <div class="stat-value-group">
             <span class="stat-value stat-highlight" id="event-rate">0</span>
             <span class="stat-unit">evt/s</span>
           </div>
         </div>
 
-        <div class="stat-card">
+        <div class="stat-card" title="Total Events Processed in Current Session">
           <span class="stat-label">TOTAL LOGS</span>
           <span class="stat-value" id="total-events">0</span>
         </div>
       </div>
     </header>
 
+    <!-- Secondary Operational KPI Strip -->
+    <div class="kpi-strip">
+      <div class="kpi-item">
+        <div class="kpi-meta">
+          <span class="kpi-title">THROUGHPUT</span>
+          <span class="kpi-subtitle">Live Ingest Stream</span>
+        </div>
+        <div class="kpi-data">
+          <span class="kpi-value" id="kpi-throughput">0 evt/s</span>
+        </div>
+      </div>
+
+      <div class="kpi-item">
+        <div class="kpi-meta">
+          <span class="kpi-title">ERROR RATE</span>
+          <span class="kpi-subtitle">Rolling 60 Seconds</span>
+        </div>
+        <div class="kpi-data">
+          <span class="kpi-value" id="kpi-error-rate">0.0%</span>
+          <span class="kpi-badge kpi-badge-healthy" id="kpi-error-badge">NORMAL</span>
+        </div>
+      </div>
+
+      <div class="kpi-item">
+        <div class="kpi-meta">
+          <span class="kpi-title">SOURCES</span>
+          <span class="kpi-subtitle">Distinct Services</span>
+        </div>
+        <div class="kpi-data">
+          <span class="kpi-value" id="kpi-sources-count">0 active</span>
+        </div>
+      </div>
+
+      <div class="kpi-item">
+        <div class="kpi-meta">
+          <span class="kpi-title">P95 INGEST LATENCY</span>
+          <span class="kpi-subtitle">Telemetry Ingestion</span>
+        </div>
+        <div class="kpi-data">
+          <span class="kpi-value" id="kpi-latency">&lt; 15 ms</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Filter & Control Toolbar -->
     <div class="toolbar">
       <div class="filter-group">
+        <!-- Search Input -->
         <div class="input-wrapper search-wrapper">
-          <svg class="input-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <svg class="input-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
-          <input type="text" id="search-input" placeholder="Search message or fields..." />
+          <input type="text" id="search-input" placeholder="Search message, host, source, fields..." />
+          <span class="kbd-shortcut-hint">/</span>
         </div>
 
+        <!-- Severity Level Filter -->
         <div class="input-wrapper">
-          <select id="level-select">
+          <select id="level-select" title="Filter by Severity Level">
             <option value="">All Levels</option>
             <option value="DEBUG">DEBUG</option>
             <option value="INFO">INFO</option>
@@ -77,78 +127,228 @@
           </select>
         </div>
 
+        <!-- Host Filter -->
         <div class="input-wrapper">
           <input type="text" id="host-input" placeholder="Filter Host..." list="hosts-list" />
           <datalist id="hosts-list"></datalist>
         </div>
 
+        <!-- Source Filter -->
         <div class="input-wrapper">
           <input type="text" id="source-input" placeholder="Filter Source..." list="sources-list" />
           <datalist id="sources-list"></datalist>
         </div>
+
+        <!-- Time Range Selector -->
+        <div class="input-wrapper">
+          <select id="time-range-select" title="Temporal Scope">
+            <option value="live">Live Stream</option>
+            <option value="5m">Last 5 min</option>
+            <option value="15m">Last 15 min</option>
+            <option value="1h">Last 1 hour</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="24h">Last 24 hours</option>
+          </select>
+        </div>
+
+        <!-- Mode Badge -->
+        <div id="stream-mode-badge" class="mode-badge mode-badge-live">
+          <span class="mode-dot"></span>
+          <span id="mode-text">LIVE</span>
+        </div>
       </div>
 
+      <!-- Action Controls -->
       <div class="control-group">
-        <button id="btn-pause" class="btn btn-secondary" title="Pause / Resume stream">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" id="pause-icon">
+        <button id="btn-pause" class="btn btn-secondary" title="Pause / Resume stream [Space]">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" id="pause-icon">
             <rect x="6" y="4" width="4" height="16"></rect>
             <rect x="14" y="4" width="4" height="16"></rect>
           </svg>
           <span id="pause-text">Pause</span>
         </button>
 
-        <button id="btn-autoscroll" class="btn btn-secondary active" title="Toggle Auto-scroll">
+        <button id="btn-autoscroll" class="btn btn-secondary active" title="Toggle Auto-scroll [L]">
           <span>Auto-scroll</span>
         </button>
 
-        <button id="btn-query" class="btn btn-primary" title="Fetch stored logs">
-          <span>Fetch Historical</span>
+        <button id="btn-clear-view" class="btn btn-danger" title="Clear current visible table buffer">
+          <span>Clear View</span>
         </button>
 
-        <button id="btn-clear" class="btn btn-danger" title="Clear table view">
-          <span>Clear</span>
+        <button id="btn-shortcuts" class="btn btn-secondary btn-icon" title="Keyboard Shortcuts [?]">
+          <span>?</span>
         </button>
       </div>
     </div>
 
-    <!-- Main Log Stream Table -->
+    <!-- Active Filters & Context Bar -->
+    <div class="filter-status-bar">
+      <div class="active-filter-chips" id="active-filters-container">
+        <!-- Rendered dynamically -->
+      </div>
+      <div class="event-count-indicator">
+        Showing <span class="event-count-highlight" id="visible-count">0</span> of <span class="event-count-highlight" id="buffered-count">0</span> events
+      </div>
+    </div>
+
+    <!-- Main High-Density Log Table Viewport -->
     <main class="log-viewport">
-      <div class="table-container">
+      <div class="table-container" id="table-container">
         <table class="log-table" id="log-table">
           <thead>
             <tr>
-              <th style="width: 190px;">TIMESTAMP</th>
-              <th style="width: 90px;">LEVEL</th>
-              <th style="width: 140px;">HOST</th>
-              <th style="width: 140px;">SOURCE</th>
+              <th style="width: 110px;">TIME (UTC)</th>
+              <th style="width: 65px;">LEVEL</th>
+              <th style="width: 65px;">STATUS</th>
+              <th style="width: 110px;">HOST</th>
+              <th style="width: 120px;">SOURCE</th>
               <th>MESSAGE</th>
-              <th style="width: 80px;">DETAILS</th>
+              <th style="width: 65px; text-align: center;">DETAILS</th>
             </tr>
           </thead>
           <tbody id="log-body">
             <!-- Dynamically populated rows -->
           </tbody>
         </table>
+
+        <!-- Dedicated Contextual Empty State -->
         <div class="empty-state" id="empty-state">
-          <p>No log events matched current filter. Waiting for incoming streams...</p>
+          <div class="empty-state-icon">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+          </div>
+          <h3 class="empty-state-title" id="empty-title">Waiting for Log Streams</h3>
+          <p class="empty-state-desc" id="empty-desc">Connect an active Barnacles Agent or generate telemetry traffic to view real-time events.</p>
         </div>
+      </div>
+
+      <!-- Floating "New Events" Pill -->
+      <div class="floating-new-events" id="floating-new-events">
+        <span class="new-events-text">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <polyline points="19 12 12 19 5 12"></polyline>
+          </svg>
+          <span id="new-events-count">0</span> new events
+        </span>
+        <button id="btn-jump-latest" class="btn-jump-latest">Jump to latest</button>
       </div>
     </main>
 
-    <!-- Details Modal -->
-    <div class="modal-overlay" id="detail-modal">
-      <div class="modal-card">
-        <div class="modal-header">
-          <h3>Log Event Details</h3>
-          <button class="modal-close" id="modal-close-btn">&times;</button>
+    <!-- Slide-Over Structured Log Detail Drawer -->
+    <div class="drawer-overlay" id="drawer-overlay"></div>
+    <aside class="drawer" id="detail-drawer" aria-label="Event Details Drawer">
+      <div class="drawer-header">
+        <div class="drawer-title-group">
+          <span class="badge badge-info" id="drawer-badge">INFO</span>
+          <h3 class="drawer-title">Event Details</h3>
         </div>
-        <div class="modal-body">
-          <pre id="modal-json-content"></pre>
+        <div class="drawer-actions">
+          <button class="drawer-btn-copy" id="drawer-btn-copy-json" title="Copy Full Event JSON">Copy JSON</button>
+          <button class="drawer-close-btn" id="drawer-close-btn" title="Close Drawer [Esc]">&times;</button>
+        </div>
+      </div>
+
+      <div class="drawer-body">
+        <!-- Overview Grid -->
+        <div class="drawer-section">
+          <div class="drawer-section-title">Overview</div>
+          <div class="overview-grid">
+            <div class="overview-item">
+              <span class="overview-key">Timestamp (UTC)</span>
+              <span class="overview-val" id="drawer-timestamp-utc">-</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-key">Timestamp (Local)</span>
+              <span class="overview-val" id="drawer-timestamp-local">-</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-key">Host</span>
+              <span class="overview-val" id="drawer-host">-</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-key">Source</span>
+              <span class="overview-val" id="drawer-source">-</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-key">HTTP Status</span>
+              <span class="overview-val" id="drawer-http-status">-</span>
+            </div>
+            <div class="overview-item">
+              <span class="overview-key">Event ID</span>
+              <span class="overview-val" id="drawer-event-id">-</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Message Box -->
+        <div class="drawer-section">
+          <div class="drawer-section-title">
+            <span>Message</span>
+            <button class="drawer-btn-copy" id="drawer-btn-copy-msg" title="Copy Message Text">Copy Message</button>
+          </div>
+          <pre class="message-box" id="drawer-message"></pre>
+        </div>
+
+        <!-- Structured Fields -->
+        <div class="drawer-section">
+          <div class="drawer-section-title">
+            <span>Structured Fields</span>
+            <span style="font-size: 0.65rem; color: var(--text-dim); text-transform: none;">Click value to copy</span>
+          </div>
+          <table class="fields-table">
+            <tbody id="drawer-fields-body">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Raw JSON Payload -->
+        <div class="drawer-section">
+          <div class="drawer-section-title">Raw Event JSON</div>
+          <pre class="raw-json-box" id="drawer-raw-json"></pre>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Keyboard Shortcuts Modal -->
+    <div class="shortcuts-modal" id="shortcuts-modal">
+      <div class="shortcuts-card">
+        <div class="shortcuts-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button class="drawer-close-btn" id="shortcuts-close-btn">&times;</button>
+        </div>
+        <div class="shortcuts-body">
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Focus Search Bar</span>
+            <div class="shortcut-keys"><kbd>/</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Pause / Resume Stream</span>
+            <div class="shortcut-keys"><kbd>Space</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Jump to Latest / Auto-scroll</span>
+            <div class="shortcut-keys"><kbd>L</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Close Drawer / Modal</span>
+            <div class="shortcut-keys"><kbd>Esc</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-desc">Show Shortcuts Help</span>
+            <div class="shortcut-keys"><kbd>?</kbd></div>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- Global Toast Notification -->
+    <div class="toast-notification" id="toast-notification">Copied to clipboard</div>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
