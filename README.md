@@ -5,7 +5,8 @@
 # Barnacles — Production-Grade Distributed Log Aggregator
 
 <p align="center">
-  <a href="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml"><img src="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml"><img src="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg" alt="Unit Tests"></a>
+  <a href="https://github.com/sarkarbikram90/barnacles"><img src="https://img.shields.io/badge/Coverage-76.1%25-brightgreen" alt="Coverage Status"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white" alt="Go Version"></a>
   <a href="docker-compose.yaml"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
@@ -208,3 +209,9 @@ All configurations support environment variable substitution (e.g. `${BARNACLES_
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+<!-- Reference Links -->
+[ci-img]: https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg
+[ci]: https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml
+[cov-img]: https://img.shields.io/badge/Coverage-76.1%25-brightgreen
+[cov]: https://github.com/sarkarbikram90/barnacles
