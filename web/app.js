@@ -128,21 +128,47 @@
     if (matchesFilter(entry)) {
       renderRow(entry);
       emptyState.style.display = 'none';
-      if (autoScroll) {
-        scrollToBottom(false);
+      if (autoScroll && !isSmoothScrolling) {
+        scrollToBottomInstant();
       }
     }
   }
 
-  function scrollToBottom(smooth = false) {
+  let isSmoothScrolling = false;
+
+  function smoothScrollToBottom(duration = 450) {
     if (!tableContainer) return;
-    requestAnimationFrame(() => {
-      if (smooth) {
-        tableContainer.scrollTo({ top: tableContainer.scrollHeight, behavior: 'smooth' });
+    const start = tableContainer.scrollTop;
+    const end = tableContainer.scrollHeight - tableContainer.clientHeight;
+    const change = end - start;
+    if (change <= 5) return;
+
+    isSmoothScrolling = true;
+    const startTime = performance.now();
+
+    function animateScroll(currentTime) {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out cubic
+      const ease = 1 - Math.pow(1 - progress, 3);
+      tableContainer.scrollTop = start + (change * ease);
+
+      if (progress < 1) {
+        requestAnimationFrame(animateScroll);
       } else {
         tableContainer.scrollTop = tableContainer.scrollHeight;
+        setTimeout(() => {
+          isSmoothScrolling = false;
+        }, 50);
       }
-    });
+    }
+
+    requestAnimationFrame(animateScroll);
+  }
+
+  function scrollToBottomInstant() {
+    if (!tableContainer || isSmoothScrolling) return;
+    tableContainer.scrollTop = tableContainer.scrollHeight;
   }
 
   function renderRow(entry) {
@@ -224,7 +250,7 @@
     }
     emptyState.style.display = count === 0 ? 'block' : 'none';
     if (autoScroll) {
-      scrollToBottom(false);
+      scrollToBottomInstant();
     }
   }
 
@@ -261,6 +287,7 @@
   sourceInput.addEventListener('input', reapplyFilters);
 
   tableContainer.addEventListener('scroll', function () {
+    if (isSmoothScrolling) return;
     const threshold = 60;
     const isAtBottom = tableContainer.scrollHeight - tableContainer.scrollTop - tableContainer.clientHeight <= threshold;
     if (!isAtBottom && autoScroll) {
@@ -287,7 +314,7 @@
     autoScroll = !autoScroll;
     btnAutoScroll.classList.toggle('active', autoScroll);
     if (autoScroll) {
-      scrollToBottom(true);
+      smoothScrollToBottom(400);
     }
   });
 
