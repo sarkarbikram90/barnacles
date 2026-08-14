@@ -128,46 +128,36 @@
     if (matchesFilter(entry)) {
       renderRow(entry);
       emptyState.style.display = 'none';
-      if (autoScroll && !isSmoothScrolling) {
+      if (autoScroll && !isGliding) {
         scrollToBottomInstant();
       }
     }
   }
 
-  let isSmoothScrolling = false;
+  let isGliding = false;
 
-  function smoothScrollToBottom(duration = 450) {
+  function triggerSmoothScrollToBottom() {
     if (!tableContainer) return;
-    const start = tableContainer.scrollTop;
-    const end = tableContainer.scrollHeight - tableContainer.clientHeight;
-    const change = end - start;
-    if (change <= 5) return;
+    isGliding = true;
+    tableContainer.style.scrollBehavior = 'smooth';
 
-    isSmoothScrolling = true;
-    const startTime = performance.now();
-
-    function animateScroll(currentTime) {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      // Ease out cubic
-      const ease = 1 - Math.pow(1 - progress, 3);
-      tableContainer.scrollTop = start + (change * ease);
-
-      if (progress < 1) {
-        requestAnimationFrame(animateScroll);
-      } else {
-        tableContainer.scrollTop = tableContainer.scrollHeight;
-        setTimeout(() => {
-          isSmoothScrolling = false;
-        }, 50);
-      }
+    if (logBody && logBody.lastElementChild) {
+      logBody.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    } else {
+      tableContainer.scrollTo({ top: tableContainer.scrollHeight, behavior: 'smooth' });
     }
 
-    requestAnimationFrame(animateScroll);
+    setTimeout(() => {
+      if (tableContainer) {
+        tableContainer.style.scrollBehavior = 'auto';
+        tableContainer.scrollTop = tableContainer.scrollHeight;
+      }
+      isGliding = false;
+    }, 600);
   }
 
   function scrollToBottomInstant() {
-    if (!tableContainer || isSmoothScrolling) return;
+    if (!tableContainer || isGliding) return;
     tableContainer.scrollTop = tableContainer.scrollHeight;
   }
 
@@ -287,7 +277,7 @@
   sourceInput.addEventListener('input', reapplyFilters);
 
   tableContainer.addEventListener('scroll', function () {
-    if (isSmoothScrolling) return;
+    if (isGliding) return;
     const threshold = 60;
     const isAtBottom = tableContainer.scrollHeight - tableContainer.scrollTop - tableContainer.clientHeight <= threshold;
     if (!isAtBottom && autoScroll) {
@@ -314,7 +304,7 @@
     autoScroll = !autoScroll;
     btnAutoScroll.classList.toggle('active', autoScroll);
     if (autoScroll) {
-      smoothScrollToBottom(400);
+      triggerSmoothScrollToBottom();
     }
   });
 
