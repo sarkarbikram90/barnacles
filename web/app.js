@@ -129,9 +129,20 @@
       renderRow(entry);
       emptyState.style.display = 'none';
       if (autoScroll) {
-        tableContainer.scrollTop = tableContainer.scrollHeight;
+        scrollToBottom(false);
       }
     }
+  }
+
+  function scrollToBottom(smooth = false) {
+    if (!tableContainer) return;
+    requestAnimationFrame(() => {
+      if (smooth) {
+        tableContainer.scrollTo({ top: tableContainer.scrollHeight, behavior: 'smooth' });
+      } else {
+        tableContainer.scrollTop = tableContainer.scrollHeight;
+      }
+    });
   }
 
   function renderRow(entry) {
@@ -213,7 +224,7 @@
     }
     emptyState.style.display = count === 0 ? 'block' : 'none';
     if (autoScroll) {
-      tableContainer.scrollTop = tableContainer.scrollHeight;
+      scrollToBottom(false);
     }
   }
 
@@ -249,6 +260,18 @@
   hostInput.addEventListener('input', reapplyFilters);
   sourceInput.addEventListener('input', reapplyFilters);
 
+  tableContainer.addEventListener('scroll', function () {
+    const threshold = 60;
+    const isAtBottom = tableContainer.scrollHeight - tableContainer.scrollTop - tableContainer.clientHeight <= threshold;
+    if (!isAtBottom && autoScroll) {
+      autoScroll = false;
+      btnAutoScroll.classList.remove('active');
+    } else if (isAtBottom && !autoScroll) {
+      autoScroll = true;
+      btnAutoScroll.classList.add('active');
+    }
+  });
+
   btnPause.addEventListener('click', function () {
     isPaused = !isPaused;
     if (isPaused) {
@@ -263,6 +286,9 @@
   btnAutoScroll.addEventListener('click', function () {
     autoScroll = !autoScroll;
     btnAutoScroll.classList.toggle('active', autoScroll);
+    if (autoScroll) {
+      scrollToBottom(true);
+    }
   });
 
   btnClear.addEventListener('click', function () {
