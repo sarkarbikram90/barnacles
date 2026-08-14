@@ -1,10 +1,18 @@
+<p align="center">
+  <img src="assets/barnacles_banner.jpg" alt="Barnacles Logo Banner" width="850">
+</p>
+
 # Barnacles — Production-Grade Distributed Log Aggregator
 
-[![CI](https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg)](https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml)
-[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](docker-compose.yaml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/sarkarbikram90/barnacles/pulls)
+<p align="center">
+  <a href="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml"><img src="https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white" alt="Go Version"></a>
+  <a href="docker-compose.yaml"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker Ready"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://github.com/sarkarbikram90/barnacles/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
+</p>
+
+> *"In the wild, barnacles anchor tenaciously to hulls in rough seas, continuously filtering nutrients from turbulent currents without letting go. In distributed systems, **Barnacles** agents attach to edge server nodes to tenaciously tail, parse, and buffer high-velocity log streams—surviving network storms and server outages with durable local disk spools."*
 
 **Barnacles** is a lightweight, production-grade distributed log aggregation and real-time streaming system written in Go (Go 1.26+). It collects log events from distributed edge agents, normalizes structured data, buffers events durably to disk during network partitions, persists time-segmented logs to storage, and streams live log events to connected browser dashboards via WebSockets.
 
