@@ -1,8 +1,10 @@
 # Barnacles — Production-Grade Distributed Log Aggregator
 
 [![CI](https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml/badge.svg)](https://github.com/sarkarbikram90/barnacles/actions/workflows/ci.yaml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/sarkarbikram90/barnacles)](https://goreportcard.com/report/github.com/sarkarbikram90/barnacles)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](docker-compose.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/sarkarbikram90/barnacles/pulls)
 
 **Barnacles** is a lightweight, production-grade distributed log aggregation and real-time streaming system written in Go (Go 1.26+). It collects log events from distributed edge agents, normalizes structured data, buffers events durably to disk during network partitions, persists time-segmented logs to storage, and streams live log events to connected browser dashboards via WebSockets.
 
