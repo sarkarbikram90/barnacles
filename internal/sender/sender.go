@@ -154,10 +154,7 @@ func IsRetryable(err error) bool {
 	}
 	// Fallback check for net.Error timeouts
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return false
+	return errors.As(err, &netErr)
 }
 
 // CalculateBackoff computes exponential backoff with full jitter.
