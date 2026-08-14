@@ -135,25 +135,54 @@
   }
 
   let isGliding = false;
+  let activeScrollAnimId = null;
 
-  function triggerSmoothScrollToBottom() {
+  function cancelGliding() {
+    if (activeScrollAnimId) {
+      cancelAnimationFrame(activeScrollAnimId);
+      activeScrollAnimId = null;
+    }
+    isGliding = false;
+  }
+
+  function smoothScrollToBottom(duration = 750) {
     if (!tableContainer) return;
-    isGliding = true;
-    tableContainer.style.scrollBehavior = 'smooth';
+    cancelGliding();
 
-    if (logBody && logBody.lastElementChild) {
-      logBody.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    } else {
-      tableContainer.scrollTo({ top: tableContainer.scrollHeight, behavior: 'smooth' });
+    const startPos = tableContainer.scrollTop;
+    const targetPos = Math.max(0, tableContainer.scrollHeight - tableContainer.clientHeight);
+    const distance = targetPos - startPos;
+
+    if (Math.abs(distance) < 2) return;
+
+    isGliding = true;
+    let startTime = null;
+
+    // Cubic ease in-out for silky smooth gentle deceleration
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
-    setTimeout(() => {
-      if (tableContainer) {
-        tableContainer.style.scrollBehavior = 'auto';
+    function step(currentTime) {
+      if (!startTime) startTime = currentTime;
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const easedProgress = easeInOutCubic(progress);
+
+      tableContainer.scrollTop = Math.round(startPos + distance * easedProgress);
+
+      if (progress < 1) {
+        activeScrollAnimId = requestAnimationFrame(step);
+      } else {
         tableContainer.scrollTop = tableContainer.scrollHeight;
+        activeScrollAnimId = null;
+        setTimeout(() => {
+          isGliding = false;
+        }, 80);
       }
-      isGliding = false;
-    }, 600);
+    }
+
+    activeScrollAnimId = requestAnimationFrame(step);
   }
 
   function scrollToBottomInstant() {
@@ -276,6 +305,14 @@
   hostInput.addEventListener('input', reapplyFilters);
   sourceInput.addEventListener('input', reapplyFilters);
 
+  tableContainer.addEventListener('wheel', function () {
+    if (isGliding) cancelGliding();
+  }, { passive: true });
+
+  tableContainer.addEventListener('touchmove', function () {
+    if (isGliding) cancelGliding();
+  }, { passive: true });
+
   tableContainer.addEventListener('scroll', function () {
     if (isGliding) return;
     const threshold = 60;
@@ -304,7 +341,7 @@
     autoScroll = !autoScroll;
     btnAutoScroll.classList.toggle('active', autoScroll);
     if (autoScroll) {
-      triggerSmoothScrollToBottom();
+      smoothScrollToBottom(750);
     }
   });
 
