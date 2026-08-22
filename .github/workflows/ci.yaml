@@ -17,8 +17,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
-          check-latest: true
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Verify Formatting (gofmt)
@@ -35,8 +34,7 @@ jobs:
       - name: GolangCI-Lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
-          install-mode: goinstall
+          version: v1.64.5
           args: --timeout=5m
 
   test-and-race:
@@ -49,8 +47,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
-          check-latest: true
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Run Tests with Race Detector
@@ -75,8 +72,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
-          check-latest: true
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Build Server Binary
