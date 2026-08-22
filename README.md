@@ -15,7 +15,7 @@
 
 > *"In the wild, barnacles anchor tenaciously to hulls in rough seas, continuously filtering nutrients from turbulent currents without letting go. In distributed systems, **Barnacles** agents attach to edge server nodes to tenaciously tail, parse, and buffer high-velocity log streams—surviving network storms and server outages with durable local disk spools."*
 
-**Barnacles** is a lightweight, production-grade distributed log aggregation and real-time streaming system written in Go (Go 1.26+). It collects log events from distributed edge agents, normalizes structured data, buffers events durably to disk during network partitions, persists time-segmented logs to storage, and streams live log events to connected browser dashboards via WebSockets.
+**Barnacles** is a lightweight, production-grade distributed log aggregation and real-time streaming system written in Go. It collects log events from distributed edge agents, normalizes structured data, buffers events durably to disk during network partitions, persists time-segmented logs to storage, and streams live log events to connected browser dashboards via WebSockets.
 
 ---
 
