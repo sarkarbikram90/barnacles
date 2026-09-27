@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -21,13 +22,14 @@ import (
 
 // Agent coordinates log collection and delivery on a host.
 type Agent struct {
-	cfg     config.AgentConfig
-	metrics *metrics.AgentMetrics
-	sender  *sender.Sender
-	spool   *spool.Spool
-	logCh   chan logentry.LogEntry
-	tailers []*tailer.Tailer
-	wg      sync.WaitGroup
+	cfg         config.AgentConfig
+	metrics     *metrics.AgentMetrics
+	sender      *sender.Sender
+	spool       *spool.Spool
+	checkpoints *tailer.CheckpointRegistry
+	logCh       chan logentry.LogEntry
+	tailers     []*tailer.Tailer
+	wg          sync.WaitGroup
 }
 
 // New creates and configures a new Agent instance.
@@ -51,6 +53,7 @@ func New(cfg config.AgentConfig, m *metrics.AgentMetrics) (*Agent, error) {
 	}
 
 	var sp *spool.Spool
+	var cpReg *tailer.CheckpointRegistry
 	if cfg.Spool.Enabled {
 		s, err := spool.New(cfg.Spool.Directory, cfg.Spool.MaxSizeMB)
 		if err != nil {
@@ -61,6 +64,13 @@ func New(cfg config.AgentConfig, m *metrics.AgentMetrics) (*Agent, error) {
 		bytesUsed, eventCount := sp.Size()
 		m.SpoolBytes.Set(float64(bytesUsed))
 		m.SpoolEvents.Set(float64(eventCount))
+
+		checkpointFile := filepath.Join(cfg.Spool.Directory, "checkpoints.json")
+		c, err := tailer.NewCheckpointRegistry(checkpointFile, 500*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("create checkpoint registry: %w", err)
+		}
+		cpReg = c
 	}
 
 	queueCap := cfg.Batch.MaxQueueEvents
@@ -69,11 +79,12 @@ func New(cfg config.AgentConfig, m *metrics.AgentMetrics) (*Agent, error) {
 	}
 
 	return &Agent{
-		cfg:     cfg,
-		metrics: m,
-		sender:  snd,
-		spool:   sp,
-		logCh:   make(chan logentry.LogEntry, queueCap),
+		cfg:         cfg,
+		metrics:     m,
+		sender:      snd,
+		spool:       sp,
+		checkpoints: cpReg,
+		logCh:       make(chan logentry.LogEntry, queueCap),
 	}, nil
 }
 
@@ -92,8 +103,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		}
 
 		t, err := tailer.New(ctx, tailer.Config{
-			Path:          srcCfg.Path,
-			StartPosition: srcCfg.StartPosition,
+			Path:               srcCfg.Path,
+			StartPosition:      srcCfg.StartPosition,
+			CheckpointRegistry: a.checkpoints,
 		})
 		if err != nil {
 			return fmt.Errorf("start tailer for source %q: %w", srcCfg.Name, err)
@@ -125,6 +137,10 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// Wait for all workers (including in-flight batch flushes) to complete
 	a.wg.Wait()
+
+	if a.checkpoints != nil {
+		_ = a.checkpoints.Close()
+	}
 
 	if a.spool != nil {
 		_ = a.spool.Close()

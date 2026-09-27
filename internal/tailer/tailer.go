@@ -28,10 +28,11 @@ const (
 
 // Config defines the tailer operational parameters.
 type Config struct {
-	Path          string
-	StartPosition string // "beginning" or "end"
-	PollInterval  time.Duration
-	MaxLineBytes  int
+	Path               string
+	StartPosition      string // "beginning" or "end"
+	PollInterval       time.Duration
+	MaxLineBytes       int
+	CheckpointRegistry *CheckpointRegistry
 }
 
 // Tailer watches and streams new lines appended to a target log file.
@@ -100,12 +101,26 @@ func (t *Tailer) emitError(err error) {
 	}
 }
 
+func (t *Tailer) recordCheckpoint(devID, fileID uint64, offset int64) {
+	if t.cfg.CheckpointRegistry != nil && (devID != 0 || fileID != 0) {
+		t.cfg.CheckpointRegistry.Set(Checkpoint{
+			DeviceID:          devID,
+			FileIdentity:      fileID,
+			FilePath:          t.cfg.Path,
+			ByteOffset:        offset,
+			LastSeenTimestamp: time.Now().UTC(),
+		})
+	}
+}
+
 func (t *Tailer) run() {
 	defer t.wg.Done()
 
 	var (
 		file       *os.File
 		fileInfo   os.FileInfo
+		devID      uint64
+		fileID     uint64
 		offset     int64
 		lineBuf    bytes.Buffer
 		isInitial  = true
@@ -114,6 +129,7 @@ func (t *Tailer) run() {
 	defer pollTicker.Stop()
 	defer func() {
 		if file != nil {
+			t.recordCheckpoint(devID, fileID, offset)
 			_ = file.Close()
 		}
 	}()
@@ -134,20 +150,41 @@ func (t *Tailer) run() {
 			}
 			file = f
 			fileInfo = info
+			devID, fileID, _ = getFileIdentity(file, fileInfo)
 
 			if isInitial {
 				isInitial = false
-				if t.cfg.StartPosition == "end" {
-					offset = info.Size()
+				// Check if persistent checkpoint exists
+				resumed := false
+				if t.cfg.CheckpointRegistry != nil {
+					if cp, exists := t.cfg.CheckpointRegistry.Get(devID, fileID); exists {
+						offset = cp.ByteOffset
+						resumed = true
+					} else if cp, exists := t.cfg.CheckpointRegistry.GetByPath(t.cfg.Path); exists && cp.ByteOffset <= info.Size() {
+						offset = cp.ByteOffset
+						resumed = true
+					}
+				}
+
+				if resumed {
 					if _, err := file.Seek(offset, io.SeekStart); err != nil {
-						t.emitError(fmt.Errorf("seek to end: %w", err))
+						t.emitError(fmt.Errorf("seek to checkpoint offset %d: %w", offset, err))
 					}
 				} else {
-					offset = 0
+					if t.cfg.StartPosition == "end" {
+						offset = info.Size()
+						if _, err := file.Seek(offset, io.SeekStart); err != nil {
+							t.emitError(fmt.Errorf("seek to end: %w", err))
+						}
+					} else {
+						offset = 0
+					}
 				}
+				t.recordCheckpoint(devID, fileID, offset)
 			} else {
 				// New file opened after rotation / recreation
 				offset = 0
+				t.recordCheckpoint(devID, fileID, offset)
 			}
 		}
 
@@ -158,6 +195,7 @@ func (t *Tailer) run() {
 			if !os.SameFile(fileInfo, currentInfo) {
 				// Read remaining old file to EOF before switching
 				t.drainFile(file, &offset, &lineBuf)
+				t.recordCheckpoint(devID, fileID, offset)
 				_ = file.Close()
 				file = nil
 				continue
@@ -166,6 +204,7 @@ func (t *Tailer) run() {
 			// Check truncation (current size < our read offset)
 			if currentInfo.Size() < offset {
 				offset = 0
+				t.recordCheckpoint(devID, fileID, offset)
 				if _, err := file.Seek(0, io.SeekStart); err != nil {
 					t.emitError(fmt.Errorf("seek to start on truncation: %w", err))
 				}
@@ -173,7 +212,11 @@ func (t *Tailer) run() {
 		}
 
 		// Read new data available from current file
+		prevOffset := offset
 		t.readAvailable(file, &offset, &lineBuf)
+		if offset != prevOffset {
+			t.recordCheckpoint(devID, fileID, offset)
+		}
 	}
 }
 
