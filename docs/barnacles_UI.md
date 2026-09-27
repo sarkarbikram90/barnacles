@@ -1,4 +1,8 @@
-# Barnacles UI — Production-Grade Observability Dashboard Upgrade
+# Barnacles UI — Production-Grade Observability Dashboard Specification
+
+> **Status (September 2026)**: Production-grade dark operational theme dashboard is integrated directly into the central server binary (`/web/index.html`). Provides real-time WebSocket log streaming, live statistics, interactive severity and text filters, event inspector drawer, and Prometheus metrics integration.
+
+---
 
 You are a senior product designer, frontend engineer, and observability-platform engineer.
 

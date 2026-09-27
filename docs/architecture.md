@@ -3,7 +3,7 @@
 Barnacles is a lightweight, distributed log aggregation and real-time streaming platform in Go.
 
 ```
-Agent Node                                     Central Server
+Agent Node (Server A)                          Central Server
 +------------------+                          +-------------------------------------------------+
 | Log Files        |                          |                                                 |
 | (app.log, etc.)  |                          |                                                 |
@@ -12,7 +12,8 @@ Agent Node                                     Central Server
          v                                    |                                                 |
 +--------+---------+                          |                                                 |
 | File Tailer      |                          |                                                 |
-| (Rotation/Trunc) |                          |                                                 |
+| + Checkpoints    | <--- (.checkpoint)       |                                                 |
+| (inode + offset) |      [device/inode/pos]  |                                                 |
 +--------+---------+                          |                                                 |
          |                                    |                                                 |
          v                                    |                                                 |
@@ -24,21 +25,22 @@ Agent Node                                     Central Server
          v                                    |                                                 |
 +--------+---------+                          |                                                 |
 | In-Memory        |                          |                                                 |
-| Batcher          |                          |                                                 |
+| Batcher & WAL    |                          |                                                 |
 +--------+---------+                          |                                                 |
          |                                    |                                                 |
          v                                    |                                                 |
-+--------+---------+     HTTP POST Batch      |  +------------------+                           |
++--------+---------+   HTTP POST /api/v1/ingest|  +------------------+                           |
 | Ingest Sender    +------------------------->|  | Ingest Handler   |                           |
-| & Retry Backoff  |  /api/v1/ingest (Bearer) |  | & Dedup LRU Cache|                           |
+| & Retry Backoff  |   or OTLP POST /v1/logs  |  | & Dedup LRU Cache|                           |
 +---+----------+---+                          |  +--------+---------+                           |
     |          ^                              |           |                                     |
     | On       | Drain                        |     +-----+----------------+                    |
-    | Outage   | On Reconnect                 |     |                      |                    |
+    | Outage   | (Peek/Ack/Commit)            |     |                      |                    |
     v          |                              |     v                      v                    |
 +---+----------+---+                          |  +--+---------------+   +--+---------------+    |
-| Durable Disk     |                          |  | Filesystem Store |   | WebSocket Hub    |    |
-| Spool Segment    |                          |  | (Time-Segmented) |   | & Recent Buffer  |    |
+| Durable Spool    |                          |  | Zstd Block Store |   | WebSocket Hub    |    |
+| (.inflight lease)|                          |  | + index.json     |   | & Recent Buffer  |    |
+| (Strict FIFO)    |                          |  | (Pruned Queries) |   | (Non-blocking)   |    |
 +------------------+                          |  +--------+---------+   +--------+---------+    |
                                               |           |                      |              |
                                               |           v                      v              |

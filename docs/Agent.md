@@ -1,4 +1,13 @@
-# Barnacles — Production-Grade MVP Implementation Prompt
+# Barnacles — Production-Grade MVP Implementation Specification
+
+> **Status (September 2026)**: Fully implemented and hardened to **Barnacles v0.2 (Crash-Safe Edge Log Transport)**.
+> - **Edge Checkpoints**: Persistent atomic watermarks (`device_id` + `inode` + `byte_offset`).
+> - **Two-Phase Spool**: Non-destructive `Peek -> Send -> Commit` protocol with `.inflight` crash recovery and strict FIFO ordering.
+> - **Compressed Storage**: Zstandard (Level 3) 64KB blocks with `index.json` manifests and pre-decompression query pruning.
+> - **Dual Ingestion**: Native batch API (`/api/v1/ingest`) + standard OpenTelemetry OTLP/HTTP (`/v1/logs`).
+> - **Verification**: 100% test coverage including the dedicated Barnacles Reliability Test Suite.
+
+---
 
 You are a senior/staff-level Go engineer and distributed-systems engineer.
 

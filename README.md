@@ -31,7 +31,8 @@ Agent Node (Server A)                          Central Server
          v                                    |                                                 |
 +--------+---------+                          |                                                 |
 | File Tailer      |                          |                                                 |
-| (Rotation/Trunc) |                          |                                                 |
+| + Checkpoints    | <--- (.checkpoint)       |                                                 |
+| (inode + offset) |      [device/inode/pos]  |                                                 |
 +--------+---------+                          |                                                 |
          |                                    |                                                 |
          v                                    |                                                 |
@@ -43,21 +44,22 @@ Agent Node (Server A)                          Central Server
          v                                    |                                                 |
 +--------+---------+                          |                                                 |
 | In-Memory        |                          |                                                 |
-| Batcher          |                          |                                                 |
+| Batcher & WAL    |                          |                                                 |
 +--------+---------+                          |                                                 |
          |                                    |                                                 |
          v                                    |                                                 |
-+--------+---------+     HTTP POST Batch      |  +------------------+                           |
++--------+---------+   HTTP POST /api/v1/ingest|  +------------------+                           |
 | Ingest Sender    +------------------------->|  | Ingest Handler   |                           |
-| & Retry Backoff  |  /api/v1/ingest (Bearer) |  | & Dedup LRU Cache|                           |
+| & Retry Backoff  |   or OTLP POST /v1/logs  |  | & Dedup LRU Cache|                           |
 +---+----------+---+                          |  +--------+---------+                           |
     |          ^                              |           |                                     |
     | On       | Drain                        |     +-----+----------------+                    |
-    | Outage   | On Reconnect                 |     |                      |                    |
+    | Outage   | (Peek/Ack/Commit)            |     |                      |                    |
     v          |                              |     v                      v                    |
 +---+----------+---+                          |  +--+---------------+   +--+---------------+    |
-| Durable Disk     |                          |  | Filesystem Store |   | WebSocket Hub    |    |
-| Spool Segment    |                          |  | (Time-Segmented) |   | & Recent Buffer  |    |
+| Durable Spool    |                          |  | Zstd Block Store |   | WebSocket Hub    |    |
+| (.inflight lease)|                          |  | + index.json     |   | & Recent Buffer  |    |
+| (Strict FIFO)    |                          |  | (Pruned Queries) |   | (Non-blocking)   |    |
 +------------------+                          |  +--------+---------+   +--------+---------+    |
                                               |           |                      |              |
                                               |           v                      v              |
@@ -204,10 +206,14 @@ All configurations support environment variable substitution (e.g. `${BARNACLES_
 
 ## 🗺 Roadmap & Future Scalability
 
-- [ ] Pluggable storage backends (ClickHouse, PostgreSQL, Object Storage).
-- [ ] OpenTelemetry trace propagation across ingestion stages.
-- [ ] Log-based alerting rules with Webhook/Slack notifications.
+- [x] OpenTelemetry native ingestion (`POST /v1/logs` HTTP/JSON).
+- [x] Persistent watermark tailer checkpoints (`device_id`, `inode`, `offset`).
+- [x] Non-destructive two-phase spool lease (`Peek` $\to$ `Send` $\to$ `Commit`).
+- [x] Zstandard block storage with `index.json` partition metadata manifests.
 - [ ] Agent dynamic log discovery via glob patterns (`/var/log/**/*.log`).
+- [ ] Kernel-level file notifications (`inotify` / `ReadDirectoryChangesW`).
+- [ ] Long-term object storage tiering (S3 / GCS / Azure Blob).
+- [ ] Central fleet management & remote Over-The-Air (OTA) configuration.
 
 ---
 

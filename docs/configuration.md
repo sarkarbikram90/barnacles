@@ -29,12 +29,17 @@ tls:
 ingest:
   max_batch_events: 500             # Maximum events allowed in single batch
   max_message_bytes: 1048576        # Max individual message size (1MB)
-  dedup_window: 5m                  # Window for idempotency deduplication
+  dedup_window: 5m                  # Window for idempotency deduplication (UUID & SHA-256)
   dedup_capacity: 50000             # Maximum UUIDs tracked in dedup cache
+  # Ingestion endpoints active by default:
+  # - POST /api/v1/ingest (Barnacles native batch protocol)
+  # - POST /v1/logs (OpenTelemetry OTLP/HTTP JSON protocol)
 
 storage:
   directory: "./data/logs"          # Path for time-segmented log files
   sync_on_write: false              # Call fsync() on every append write
+  # Format: Hourly partitions with 64KB Zstandard (Level 3) compressed blocks
+  # Companion index.json manifests store min/max timestamps and level bitmasks for query pruning
 
 stream:
   recent_events: 10000              # In-memory recent ring buffer capacity
@@ -82,8 +87,13 @@ spool:
   directory: "./data/agent-spool"   # Path to local disk spool directory
   max_size_mb: 1024                 # 1GB maximum spool capacity on disk
   max_batch_events: 500             # Events per spool file segment
+  # Protocol: Non-destructive Peek -> Send -> Commit protocol with fsync durability.
+  # In-flight files (.inflight) are recovered automatically on agent restart to prevent data loss.
+  # Live incoming batches route into spool if a backlog exists to guarantee strict FIFO ordering.
 
 sources:
+  # Each watched file maintains an atomic watermark checkpoint (.checkpoint)
+  # tracking device_id, inode, and byte offset for zero-loss crash resumption across reboots.
   - name: "app-service"             # Unique source name
     path: "/var/log/app.log"        # File path to tail
     format: "auto"                  # Parser: "auto", "json", "text", "regexp"
