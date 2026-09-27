@@ -145,7 +145,7 @@ func (t *Tailer) run() {
 		if file == nil {
 			f, info, err := t.openFile()
 			if err != nil {
-				// File does not exist yet; wait for it
+				t.emitError(fmt.Errorf("open file %q error: %w", t.cfg.Path, err))
 				continue
 			}
 			file = f
@@ -157,12 +157,21 @@ func (t *Tailer) run() {
 				// Check if persistent checkpoint exists
 				resumed := false
 				if t.cfg.CheckpointRegistry != nil {
-					if cp, exists := t.cfg.CheckpointRegistry.Get(devID, fileID); exists {
-						offset = cp.ByteOffset
-						resumed = true
-					} else if cp, exists := t.cfg.CheckpointRegistry.GetByPath(t.cfg.Path); exists && cp.ByteOffset <= info.Size() {
-						offset = cp.ByteOffset
-						resumed = true
+					if devID != 0 && fileID != 0 {
+						if cp, exists := t.cfg.CheckpointRegistry.Get(devID, fileID); exists {
+							if cp.ByteOffset <= info.Size() {
+								offset = cp.ByteOffset
+							} else {
+								offset = 0
+							}
+							resumed = true
+						}
+					} else {
+						// Only use path fallback when filesystem doesn't provide file identity
+						if cp, exists := t.cfg.CheckpointRegistry.GetByPath(t.cfg.Path); exists && cp.ByteOffset <= info.Size() {
+							offset = cp.ByteOffset
+							resumed = true
+						}
 					}
 				}
 
