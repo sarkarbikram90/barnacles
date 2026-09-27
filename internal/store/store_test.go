@@ -10,6 +10,100 @@ import (
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 )
 
+func TestBlockEncodingAndDecoding(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []logentry.LogEntry{
+		logentry.New("srv-1", "nginx", "INFO", "GET /api/v1/health 200", map[string]string{"latency_ms": "12"}),
+		logentry.New("srv-2", "db", "ERROR", "connection refused", map[string]string{"err_code": "5001"}),
+	}
+	entries[0].Timestamp = now
+	entries[1].Timestamp = now.Add(1 * time.Second)
+
+	header, compressed, err := EncodeBlock(entries)
+	if err != nil {
+		t.Fatalf("EncodeBlock failed: %v", err)
+	}
+
+	if header.RecordCount != 2 {
+		t.Fatalf("expected 2 records, got %d", header.RecordCount)
+	}
+	if (header.LevelMask & LevelInfo) == 0 || (header.LevelMask & LevelError) == 0 {
+		t.Fatalf("expected LevelMask to contain INFO and ERROR, got %b", header.LevelMask)
+	}
+	if len(compressed) >= int(header.UncompressedBytes) && len(compressed) > 500 {
+		t.Fatalf("expected compression reduction, compressed=%d, uncompressed=%d",
+			len(compressed), header.UncompressedBytes)
+	}
+
+	// Decode
+	decoded, err := DecodeBlock(compressed)
+	if err != nil {
+		t.Fatalf("DecodeBlock failed: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 decoded entries, got %d", len(decoded))
+	}
+	if decoded[0].Message != "GET /api/v1/health 200" || decoded[1].Message != "connection refused" {
+		t.Fatalf("unexpected decoded content: %+v", decoded)
+	}
+}
+
+func TestBlockMetadataPruning(t *testing.T) {
+	now := time.Now().UTC()
+	header := BlockHeader{
+		MinTimestampNano: now.UnixNano(),
+		MaxTimestampNano: now.Add(10 * time.Minute).UnixNano(),
+		LevelMask:         LevelInfo | LevelWarn, // contains only INFO and WARN
+		Hosts:             []string{"web-node-01"},
+		Sources:           []string{"nginx-access"},
+	}
+
+	// 1. Matches: time overlap + INFO level
+	qMatch := logentry.Query{
+		StartTime: now.Add(-5 * time.Minute),
+		EndTime:   now.Add(5 * time.Minute),
+		Level:     "INFO",
+		Host:      "web-node-01",
+		Source:    "nginx-access",
+	}
+	if !header.MatchesQuery(qMatch) {
+		t.Fatalf("expected block to match query")
+	}
+
+	// 2. Prune by time: query ends before block starts
+	qEarly := logentry.Query{
+		StartTime: now.Add(-10 * time.Minute),
+		EndTime:   now.Add(-1 * time.Minute),
+	}
+	if header.MatchesQuery(qEarly) {
+		t.Fatalf("expected block to be pruned due to earlier time")
+	}
+
+	// 3. Prune by level: query asks for ERROR, but block only has INFO|WARN
+	qError := logentry.Query{
+		Level: "ERROR",
+	}
+	if header.MatchesQuery(qError) {
+		t.Fatalf("expected block to be pruned due to level mismatch")
+	}
+
+	// 4. Prune by host: query asks for db-node-01
+	qHost := logentry.Query{
+		Host: "db-node-01",
+	}
+	if header.MatchesQuery(qHost) {
+		t.Fatalf("expected block to be pruned due to host mismatch")
+	}
+
+	// 5. Prune by source: query asks for redis
+	qSource := logentry.Query{
+		Source: "redis",
+	}
+	if header.MatchesQuery(qSource) {
+		t.Fatalf("expected block to be pruned due to source mismatch")
+	}
+}
+
 func TestFileStoreAppendAndQuery(t *testing.T) {
 	tempDir := t.TempDir()
 	storeDir := filepath.Join(tempDir, "logs")
