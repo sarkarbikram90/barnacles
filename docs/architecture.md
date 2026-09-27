@@ -59,9 +59,9 @@ Agent Node                                     Central Server
 - **Sender / Spool Drainer**: 1 goroutine for draining the disk-backed spool with exponential backoff and full jitter when the central server recovers from an outage.
 
 ### Server Concurrency
-- **HTTP Ingestion Pipeline**: Managed by Go's standard `net/http` server with bounded request bodies (`http.MaxBytesReader`) and request timeouts.
-- **Idempotency Deduplication**: Thread-safe in-memory LRU/TTL cache (`sync.Mutex`) verifying unique UUIDs within a 5-minute sliding window.
-- **Storage Subsystem**: Concurrency-safe `FileStore` with append-only segment writes (`sync.RWMutex`) and read streaming.
+- **HTTP Ingestion Pipeline**: Managed by Go's standard `net/http` server with bounded request bodies (`http.MaxBytesReader`) and request timeouts. Supports native `/api/v1/ingest` and OpenTelemetry `/v1/logs`.
+- **Idempotency Deduplication**: Thread-safe in-memory LRU/TTL cache (`sync.Mutex`) verifying unique UUIDs and SHA-256 event hashes within a 5-minute sliding window.
+- **Storage Subsystem**: Concurrency-safe `FileStore` (`sync.RWMutex`) organizing hourly partitions into Zstandard compressed blocks with companion `index.json` metadata manifests.
 - **WebSocket Hub**: Manages active browser client connections. Each client has an independent `writePump` and `readPump`. Broadcasts use non-blocking channel writes; slow clients whose per-client queues overflow are safely disconnected to prevent backpressure from stalling ingestion.
 - **Retention Worker**: 1 background goroutine running on a configurable ticker (`check_interval`), evaluating disk budget and age limits without locking ingestion.
 
@@ -83,8 +83,11 @@ Every queue in Barnacles has an explicit capacity:
 
 ## 3. Delivery & Failure Semantics
 
-- **At-Least-Once Delivery**: The agent guarantees all read log lines are delivered to the server or persisted to the local disk spool during downstream outages.
-- **Idempotency**: If network failures cause an agent to retry a previously acknowledged batch, the server uses the 5-minute deduplication cache to identify duplicate event IDs and prevent double-writing.
-- **Outage Survival**: When the Barnacles server is stopped or unreachable, the agent automatically spools batches to disk. When the server returns, the spool worker drains queued logs in FIFO order.
-- **Rotation Resilience**: During log rotation (`app.log` -> `app.log.1`), the tailer continues reading the remaining bytes of the rotated file to EOF before seamlessly following the newly created file.
-- **Ordering**: Per-source ordering is preserved within each agent. Timestamps are serialized in UTC RFC3339 format.
+- **Crash-Safe Checkpoint Watermarks**: File tailers maintain atomic checkpoints on disk (`.checkpoint`) tracking `device_id`, `file_identity/inode`, `file_path`, and `byte_offset`. If the agent crashes or the machine loses power, the tailer resumes reading from the exact byte offset upon restart.
+- **Rotation Resilience**: During log rotation (`app.log` -> `app.log.1`), the tailer tracks the file handle's inode identity, reads the rotated file to EOF, and follows the newly created replacement file without missing lines or corrupting offsets.
+- **Two-Phase Peek/Commit Spool Protocol**: Batches buffered to the disk spool are leased non-destructively via `Peek()`. The batch is marked as `.inflight` on disk. The file is unlinked only after the server acknowledges successful ingestion (`Commit()`). If sending fails, `Revert()` renames the file back so it remains next in line.
+- **Crash Recovery**: If an agent process is killed (SIGKILL / power loss) while sending a leased batch, the spool startup scan automatically restores `.inflight` files back into the active spool, preventing log loss.
+- **Strict FIFO Preservation**: To prevent leapfrogging during transient network recovery, the agent enforces unified WAL queuing: whenever backlogged batches exist on disk, incoming live batches are spooled directly to preserve absolute chronological delivery order.
+- **Zstandard Block Compression & Query Pruning**: Partition files store 64KB batches compressed with Zstd Level 3. The `index.json` partition index records block boundaries, event counts, min/max timestamps, and level bitmasks (`1<<0` for INFO, `1<<1` for WARN, `1<<2` for ERROR), allowing queries to prune non-matching blocks without decompression.
+- **Idempotency**: If network timeouts or retries deliver an already-ingested batch, the server's deduplication cache identifies duplicate IDs and skips duplicate disk writes.
+

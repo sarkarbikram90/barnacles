@@ -57,7 +57,69 @@ Authorization: Bearer <token>
 
 ---
 
-## 2. WebSocket Streaming Protocol
+## 2. OpenTelemetry OTLP/HTTP Logs Ingestion API
+
+Barnacles natively supports standard OpenTelemetry log ingestion over HTTP/JSON without requiring an intermediate collector or gateway.
+
+### Endpoint
+```http
+POST /v1/logs
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+### Request Payload (`ExportLogsServiceRequest`)
+```json
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "payment-service"}},
+          {"key": "host.name", "value": {"stringValue": "k8s-node-42"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {"name": "com.barnacles.checkout"},
+          "logRecords": [
+            {
+              "timeUnixNano": "1786795200000000000",
+              "severityText": "ERROR",
+              "severityNumber": 17,
+              "body": {"stringValue": "Transaction failed: card declined"},
+              "attributes": [
+                {"key": "transaction_id", "value": {"stringValue": "tx_998123"}},
+                {"key": "http.status_code", "value": {"intValue": 402}}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Response Payload (`ExportLogsServiceResponse`)
+```json
+{
+  "partialSuccess": {}
+}
+```
+
+### Field Mapping Rules
+- **Host**: Extracted from `resource.attributes` with keys `host.name`, `host.id`, `node.name`, or fallback `unknown-host`.
+- **Source**: Extracted from `resource.attributes` with keys `service.name`, `app`, `container.name`, or scope `name`.
+- **Timestamp**: Converted from nanoseconds (`timeUnixNano` or `observedTimeUnixNano`) to RFC3339 UTC.
+- **Level**: Evaluated from `severityText` or standard OTLP severity numbers (1-4: TRACE, 5-8: DEBUG, 9-12: INFO, 13-16: WARN, 17-20: ERROR, 21-24: FATAL).
+- **Body**: Extracted from string or formatted value.
+- **Attributes**: Flattened into Barnacles structured `fields` map.
+- **Deduplication**: SHA-256 hash generated over entry attributes and checked against the sliding-window LRU cache.
+
+---
+
+## 3. WebSocket Streaming Protocol
 
 Browsers and real-time clients stream logs over WebSockets.
 
@@ -114,7 +176,7 @@ WebSocket Ping frames are sent by the server every `ping_interval` (default 30s)
 
 ---
 
-## 3. REST Query API
+## 4. REST Query API
 
 ### Endpoint
 ```http

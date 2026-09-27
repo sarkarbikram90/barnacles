@@ -81,11 +81,11 @@ Barnacles is intentionally designed as a lightweight, operationally simple log a
 
 ## ✨ Features
 
-- **Robust Edge File Tailing**: Supports append-only writes, rename-based rotation (`app.log` -> `app.log.1`), truncation detection, partial line accumulation, and configurable starting positions (`beginning` or `end`).
+- **Crash-Safe Edge File Tailing**: Persistent watermark checkpoints (`device_id`, `file_identity/inode`, `byte_offset`) committed atomically to disk; automatically survives agent crashes, hard reboots, and log file rotations (`app.log` -> `app.log.1`).
+- **Peek -> Send -> Commit Disk Spooling**: Batches are never unlinked before central server ACK. In-flight leases are recovered on crash restart, fsync writes ensure crash durability, and strict FIFO order is preserved across network partitions.
+- **Zstandard Compressed Block Storage**: Server storage organizes hourly partitions into Zstandard-compressed blocks (level 3) with companion `index.json` metadata manifests, enabling pre-decompression query pruning by time range and log level bitmasks.
+- **OpenTelemetry Native Ingestion**: Supports standard OTLP/HTTP JSON (`POST /v1/logs`) as well as native Barnacles batches (`POST /api/v1/ingest`) with sliding-window LRU deduplication.
 - **Flexible Log Parsing**: Built-in parsers for Plain Text, JSON logs, and Named Regexp capture groups, with an auto-detecting parser that preserves unparseable lines.
-- **Local Disk-Backed Spooling**: Automatically buffers log batches to local disk when downstream central servers are unavailable. Recovers and drains seamlessly on reconnection.
-- **Idempotent Ingestion & Deduplication**: Sliding-window LRU cache on the server prevents duplicate log entries during network retries.
-- **Time-Segmented Storage & Retention**: Persists logs partitioned by date/hour, with background retention workers enforcing size and age limits.
 - **Real-Time WebSocket Streaming**: Non-blocking broadcast with ring buffer recent replay and slow-client disconnect protection.
 - **Modern Web Dashboard**: Real-time stats, log level coloring, interactive filters (host, source, level, text search), and event inspector modal.
 - **Production Observability**: Full Prometheus metrics endpoints (`/metrics`) and health checks (`/healthz`, `/readyz`) on both Agent and Server.
@@ -147,7 +147,8 @@ Open **http://localhost:8080** in your browser!
 | `GET` | `/healthz` | Liveness health check | No |
 | `GET` | `/readyz` | Readiness health check | No |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint | No |
-| `POST` | `/api/v1/ingest` | Batch log event ingestion | Optional Bearer Token |
+| `POST` | `/api/v1/ingest` | Native batch log event ingestion | Optional Bearer Token |
+| `POST` | `/v1/logs` | OpenTelemetry OTLP/HTTP JSON log ingestion | Optional Bearer Token |
 | `GET` | `/api/v1/logs` | Query stored logs by host, source, level, search | Optional Bearer Token |
 | `GET` | `/api/v1/sources` | List all distinct log sources | Optional Bearer Token |
 | `GET` | `/api/v1/agents` | List all distinct agent/host names | Optional Bearer Token |
@@ -157,11 +158,15 @@ Open **http://localhost:8080** in your browser!
 
 ## 🧪 Testing & Verification
 
-Barnacles includes comprehensive unit tests, table-driven test suites, concurrency race verification, benchmarks, and fuzz testing:
+Barnacles includes comprehensive unit tests, table-driven test suites, the **Barnacles Reliability Test Suite** (validating crash recovery before ACK, rotation resumption, and strict FIFO ordering under network partitions), concurrency race verification, benchmarks, and fuzz testing:
 
 ```bash
-# Run all unit and integration tests
+# Run all unit and integration tests (including Reliability Suite)
 go test -v ./...
+
+# Run the dedicated Barnacles Reliability Test Suite
+go test -v -run TestStrictFIFO ./internal/agent/...
+go test -v -run TestCrash ./internal/agent/...
 
 # Run race detector (Linux/CI)
 go test -v -race ./...
