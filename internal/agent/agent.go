@@ -220,6 +220,19 @@ func (a *Agent) deliverBatch(ctx context.Context, batch []logentry.LogEntry) {
 		return
 	}
 
+	// If spool has pending backlog, do NOT send live batch directly to prevent out-of-order delivery.
+	// Enqueue directly to spool tail so strict FIFO ordering is maintained.
+	if a.spool != nil && a.spool.Count() > 0 {
+		if spoolErr := a.spool.Push(batch); spoolErr != nil {
+			slog.Error("Failed to buffer batch to disk spool", "error", spoolErr)
+		} else {
+			bytesUsed, eventCount := a.spool.Size()
+			a.metrics.SpoolBytes.Set(float64(bytesUsed))
+			a.metrics.SpoolEvents.Set(float64(eventCount))
+		}
+		return
+	}
+
 	// Try sending directly with a short timeout
 	sendCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_, err := a.sender.Send(sendCtx, a.cfg.Agent.ID, batch)
@@ -261,28 +274,38 @@ func (a *Agent) spoolDrainWorker(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(500 * time.Millisecond):
+			case <-time.After(200 * time.Millisecond):
 				continue
 			}
 		}
 
-		batch, err := a.spool.Pop()
+		// Non-destructive Peek: does NOT delete from disk until confirmed by server ACK
+		lease, err := a.spool.Peek()
 		if err != nil {
-			if errors.Is(err, spool.ErrEmpty) {
-				continue
+			if errors.Is(err, spool.ErrEmpty) || errors.Is(err, spool.ErrInFlight) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+					continue
+				}
 			}
-			slog.Error("Failed to pop batch from spool", "error", err)
+			slog.Error("Failed to peek batch from spool", "error", err)
 			continue
 		}
 
 		sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, sendErr := a.sender.Send(sendCtx, a.cfg.Agent.ID, batch)
+		_, sendErr := a.sender.Send(sendCtx, a.cfg.Agent.ID, lease.Events)
 		cancel()
 
 		if sendErr == nil {
 			attempt = 0
+			// Commit: unlinks segment file from disk only upon verified delivery
+			if commitErr := lease.Commit(); commitErr != nil {
+				slog.Error("Failed to commit spool lease", "error", commitErr)
+			}
 			a.metrics.BatchesSentTotal.Inc()
-			a.metrics.EventsSentTotal.Add(float64(len(batch)))
+			a.metrics.EventsSentTotal.Add(float64(len(lease.Events)))
 
 			bytesUsed, eventCount := a.spool.Size()
 			a.metrics.SpoolBytes.Set(float64(bytesUsed))
@@ -290,10 +313,17 @@ func (a *Agent) spoolDrainWorker(ctx context.Context) {
 			continue
 		}
 
-		// Failed to send; put back into spool if retryable
+		// Failed to send:
 		a.metrics.SendErrorsTotal.Inc()
 		if sender.IsRetryable(sendErr) {
-			_ = a.spool.Push(batch)
+			// Revert lease to HEAD of queue so it is retried next, preserving strict FIFO ordering!
+			if revertErr := lease.Revert(); revertErr != nil {
+				slog.Error("Failed to revert spool lease", "error", revertErr)
+			}
+		} else {
+			// Permanent error (e.g. 400 Bad Request or malformed): commit to drop poison pill
+			slog.Error("Dropping poison batch due to permanent non-retryable error", "error", sendErr)
+			_ = lease.Commit()
 		}
 
 		attempt++
