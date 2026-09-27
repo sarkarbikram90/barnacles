@@ -120,8 +120,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/readyz", s.health.Readyz)
 	mux.Handle("/metrics", s.metrics.Handler())
 
-	// Ingest endpoint
+	// Ingest endpoints (Barnacles batch API + standard OpenTelemetry OTLP /v1/logs)
 	mux.Handle("/api/v1/ingest", s.ingest)
+	mux.HandleFunc("/v1/logs", s.ingest.ServeOTLP)
 
 	// REST Query endpoints
 	mux.HandleFunc("/api/v1/logs", handleLogsQuery(s.store))

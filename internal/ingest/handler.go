@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/sarkarbikram90/barnacles/internal/stream"
 )
 
-// Handler processes log ingestion HTTP requests.
+// Handler processes log ingestion HTTP requests for both Barnacles batch API and OpenTelemetry /v1/logs.
 type Handler struct {
 	cfg     config.IngestSettings
 	store   store.LogStore
@@ -100,59 +101,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.metrics.EventsIngestedTotal.Add(float64(len(req.Events)))
 	}
 
-	var (
-		accepted   []logentry.LogEntry
-		duplicates int
-		valErrors  []string
-	)
-
-	for i := range req.Events {
-		entry := &req.Events[i]
-
-		// Default host from Agent ID if missing
-		if entry.Host == "" && req.AgentID != "" {
-			entry.Host = req.AgentID
-		}
-
-		// Validate entry fields & size
-		if err := entry.Validate(h.cfg.MaxMessageBytes); err != nil {
-			valErrors = append(valErrors, err.Error())
-			continue
-		}
-
-		// Check idempotency deduplication
-		if h.dedup.IsDuplicate(entry.ID) {
-			duplicates++
-			continue
-		}
-
-		accepted = append(accepted, *entry)
-	}
-
-	// Persist to store if we have accepted entries
-	if len(accepted) > 0 {
-		if err := h.store.Append(r.Context(), accepted); err != nil {
-			if h.metrics != nil {
-				h.metrics.IngestErrorsTotal.Inc()
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
-				Status: "error",
-				Errors: []string{"storage error: " + err.Error()},
-			})
-			return
-		}
-
-		if h.metrics != nil {
-			h.metrics.EventsStoredTotal.Add(float64(len(accepted)))
-			h.metrics.StorageBytes.Set(float64(h.store.DiskUsage()))
-		}
-
-		// Broadcast to WebSocket clients
-		if h.hub != nil {
-			h.hub.Broadcast(accepted)
-		}
+	accepted, duplicates, valErrors, err := h.ingestEntries(r.Context(), req.Events, req.AgentID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+			Status: "error",
+			Errors: []string{"storage error: " + err.Error()},
+		})
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -163,4 +120,108 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Duplicates: duplicates,
 		Errors:     valErrors,
 	})
+}
+
+// ServeOTLP handles standard OpenTelemetry OTLP/HTTP POST /v1/logs requests.
+func (h *Handler) ServeOTLP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() {
+		if h.metrics != nil {
+			h.metrics.IngestDuration.Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	maxBytes := int64(10 * 1024 * 1024)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+
+	entries, err := ParseOTLPLogsJSON(r.Body)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.IngestErrorsTotal.Inc()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	if len(entries) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"partialSuccess": map[string]any{}})
+		return
+	}
+
+	if h.metrics != nil {
+		h.metrics.EventsIngestedTotal.Add(float64(len(entries)))
+	}
+
+	accepted, _, _, err := h.ingestEntries(r.Context(), entries, "otlp-service")
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"partialSuccess": map[string]any{
+			"rejectedLogRecords": len(entries) - len(accepted),
+		},
+	})
+}
+
+func (h *Handler) ingestEntries(ctx context.Context, entries []logentry.LogEntry, defaultHost string) ([]logentry.LogEntry, int, []string, error) {
+	var (
+		accepted   []logentry.LogEntry
+		duplicates int
+		valErrors  []string
+	)
+
+	for i := range entries {
+		entry := &entries[i]
+
+		if entry.Host == "" && defaultHost != "" {
+			entry.Host = defaultHost
+		}
+
+		if err := entry.Validate(h.cfg.MaxMessageBytes); err != nil {
+			valErrors = append(valErrors, err.Error())
+			continue
+		}
+
+		if h.dedup.IsDuplicate(entry.ID) {
+			duplicates++
+			continue
+		}
+
+		accepted = append(accepted, *entry)
+	}
+
+	if len(accepted) > 0 {
+		if err := h.store.Append(ctx, accepted); err != nil {
+			if h.metrics != nil {
+				h.metrics.IngestErrorsTotal.Inc()
+			}
+			return nil, duplicates, valErrors, err
+		}
+
+		if h.metrics != nil {
+			h.metrics.EventsStoredTotal.Add(float64(len(accepted)))
+			h.metrics.StorageBytes.Set(float64(h.store.DiskUsage()))
+		}
+
+		if h.hub != nil {
+			h.hub.Broadcast(accepted)
+		}
+	}
+
+	return accepted, duplicates, valErrors, nil
 }
