@@ -49,8 +49,8 @@ func LevelToBit(level string) uint16 {
 type BlockHeader struct {
 	ID                string   `json:"id"`
 	FileName          string   `json:"file_name"`
-	MinTimestampNano int64    `json:"min_ts_nano"`
-	MaxTimestampNano int64    `json:"max_ts_nano"`
+	MinTimestampNano  int64    `json:"min_ts_nano"`
+	MaxTimestampNano  int64    `json:"max_ts_nano"`
 	RecordCount       int      `json:"record_count"`
 	UncompressedBytes int64    `json:"uncompressed_bytes"`
 	CompressedBytes   int64    `json:"compressed_bytes"`
@@ -159,8 +159,8 @@ func EncodeBlock(entries []logentry.LogEntry) (BlockHeader, []byte, error) {
 	header := BlockHeader{
 		ID:                blockID,
 		FileName:          fileName,
-		MinTimestampNano: minTsNano,
-		MaxTimestampNano: maxTsNano,
+		MinTimestampNano:  minTsNano,
+		MaxTimestampNano:  maxTsNano,
 		RecordCount:       len(entries),
 		UncompressedBytes: int64(len(uncompressed)),
 		CompressedBytes:   int64(len(compressed)),

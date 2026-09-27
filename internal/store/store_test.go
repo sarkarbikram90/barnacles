@@ -27,7 +27,7 @@ func TestBlockEncodingAndDecoding(t *testing.T) {
 	if header.RecordCount != 2 {
 		t.Fatalf("expected 2 records, got %d", header.RecordCount)
 	}
-	if (header.LevelMask & LevelInfo) == 0 || (header.LevelMask & LevelError) == 0 {
+	if (header.LevelMask&LevelInfo) == 0 || (header.LevelMask&LevelError) == 0 {
 		t.Fatalf("expected LevelMask to contain INFO and ERROR, got %b", header.LevelMask)
 	}
 	if len(compressed) >= int(header.UncompressedBytes) && len(compressed) > 500 {
@@ -53,9 +53,9 @@ func TestBlockMetadataPruning(t *testing.T) {
 	header := BlockHeader{
 		MinTimestampNano: now.UnixNano(),
 		MaxTimestampNano: now.Add(10 * time.Minute).UnixNano(),
-		LevelMask:         LevelInfo | LevelWarn, // contains only INFO and WARN
-		Hosts:             []string{"web-node-01"},
-		Sources:           []string{"nginx-access"},
+		LevelMask:        LevelInfo | LevelWarn, // contains only INFO and WARN
+		Hosts:            []string{"web-node-01"},
+		Sources:          []string{"nginx-access"},
 	}
 
 	// 1. Matches: time overlap + INFO level

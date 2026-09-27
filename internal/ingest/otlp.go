@@ -55,10 +55,10 @@ type OTLPKeyValue struct {
 }
 
 type OTLPAnyValue struct {
-	StringValue *string `json:"stringValue,omitempty"`
-	BoolValue   *bool   `json:"boolValue,omitempty"`
-	IntValue    any     `json:"intValue,omitempty"`
-	DoubleValue *float64`json:"doubleValue,omitempty"`
+	StringValue *string  `json:"stringValue,omitempty"`
+	BoolValue   *bool    `json:"boolValue,omitempty"`
+	IntValue    any      `json:"intValue,omitempty"`
+	DoubleValue *float64 `json:"doubleValue,omitempty"`
 }
 
 func (v *OTLPAnyValue) String() string {
