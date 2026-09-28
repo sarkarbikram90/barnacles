@@ -50,7 +50,7 @@ func main() {
 
 	agentMetrics := metrics.NewAgentMetrics()
 
-	// Start local metrics / health server if configured
+	var metricsServer *http.Server
 	if cfg.Agent.MetricsAddress != "" {
 		healthHandler := health.NewHandler()
 		mux := http.NewServeMux()
@@ -58,7 +58,7 @@ func main() {
 		mux.HandleFunc("/readyz", healthHandler.Readyz)
 		mux.Handle("/metrics", agentMetrics.Handler())
 
-		metricsServer := &http.Server{
+		metricsServer = &http.Server{
 			Addr:              cfg.Agent.MetricsAddress,
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
@@ -80,6 +80,15 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if metricsServer != nil {
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer shutdownCancel()
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}()
+	}
 
 	if err := ag.Start(ctx); err != nil {
 		slog.Error("Agent terminated with error", "error", err)

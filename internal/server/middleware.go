@@ -4,6 +4,7 @@ package server
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net"
@@ -101,7 +102,7 @@ func AuthMiddleware(authCfg config.AuthSettings, next http.Handler) http.Handler
 
 		var matched bool
 		for _, validToken := range authCfg.Tokens {
-			if token != "" && token == validToken {
+			if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(validToken)) == 1 {
 				matched = true
 				break
 			}
