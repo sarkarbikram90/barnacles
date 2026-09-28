@@ -12,8 +12,17 @@ Agents deliver batches to the central server via HTTP POST.
 ```http
 POST /api/v1/ingest
 Content-Type: application/json
+Content-Encoding: zstd          # Optional: "zstd" (default) or "gzip" for wire compression
 Authorization: Bearer <token>
 ```
+
+### Wire Compression
+HTTP ingestion requests support transparent payload compression to minimize network egress and transmission latency:
+- `Content-Encoding: zstd`: Payload compressed with Zstandard (Level 3 default used by Barnacles Agent).
+- `Content-Encoding: gzip`: Payload compressed with standard Gzip.
+- Omitted / empty: Plain uncompressed JSON.
+
+Transparent wire decompression is supported on both native `/api/v1/ingest` and OpenTelemetry `/v1/logs`, guarded by a 10MB maximum decoded payload limit against decompression bombs.
 
 ### Request Payload (`IngestRequest`)
 ```json
@@ -152,8 +161,29 @@ Sent immediately upon connection to populate the client dashboard with recent in
 }
 ```
 
-#### 2. Live Log Event (`log`)
-Broadcast to connected clients in real-time:
+#### 2. Live Log Batch (`log_batch`)
+Broadcast to connected clients for high-throughput streaming (groups of events transmitted in a single WebSocket frame to reduce per-message framing overhead):
+```json
+{
+  "type": "log_batch",
+  "data": [
+    {
+      "id": "c1f76092-23c7-43cf-bc01-e28e08d66141",
+      "timestamp": "2026-08-14T12:00:00Z",
+      "host": "srv-prod-01",
+      "source": "nginx-access",
+      "level": "INFO",
+      "message": "GET /api/v1/users 200 45ms",
+      "fields": {
+        "status": "200"
+      }
+    }
+  ]
+}
+```
+
+#### 3. Single Live Log Event (`log`)
+Legacy single-event broadcast envelope (supported for backward compatibility):
 ```json
 {
   "type": "log",
@@ -171,7 +201,7 @@ Broadcast to connected clients in real-time:
 }
 ```
 
-#### 3. Heartbeats
+#### 4. Heartbeats
 WebSocket Ping frames are sent by the server every `ping_interval` (default 30s). Standard Pong responses are validated to keep connections alive and detect stale sockets.
 
 ---

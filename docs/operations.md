@@ -66,13 +66,18 @@ Both Barnacles Server and Agent expose Prometheus-compatible metrics.
 
 ### Scenario 5: Slow WebSocket Browser Client
 - **Observation**: A browser tab is throttled or stalls on the network.
-- **Behavior**: The server's broadcast logic detects that the client's 256-message buffer is full. The slow client is disconnected, freeing server memory and preventing backpressure from blocking central ingestion. The event is recorded in `barnacles_server_websocket_disconnects_total{reason="buffer_overflow"}`.
+- **Behavior**: The server broadcasts log events using high-efficiency batch envelopes (`log_batch`), minimizing framing overhead. If a client stalls and its 256-message buffer overflows, the slow client is disconnected, freeing server memory and preventing backpressure from blocking central ingestion. The event is recorded in `barnacles_server_websocket_disconnects_total{reason="buffer_overflow"}`.
 
 ### Scenario 6: Compressed Storage & Background Retention
 - **Observation**: Disk usage approaches `max_size_gb` or logs exceed `max_age_hours`.
-- **Behavior**: Storage partition segments are compressed in 64KB Zstandard blocks accompanied by `index.json` manifests. The background retention worker prunes the oldest hourly partitions, deleting both the data blocks and index entries while keeping memory and storage bounded.
+- **Behavior**: Storage partition segments are compressed into 64KB Zstandard blocks accompanied by append-only `index.jsonl` manifests (with transparent backwards compatibility for legacy `index.json`). Block index metadata is appended in $O(1)$ time, completely avoiding $O(N)$ disk write amplification. The background retention worker prunes the oldest hourly partitions, deleting both the data blocks and index entries while keeping memory and storage bounded.
 
 ### Scenario 7: OpenTelemetry Collector or SDK Ingestion
 - **Observation**: Applications or external OpenTelemetry collectors stream telemetry to Barnacles.
 - **Behavior**: Direct HTTP POST requests to `/v1/logs` are received by the native OTLP handler, parsed from `ExportLogsServiceRequest` JSON, deduplicated against the central 5-minute sliding LRU cache, persisted to the Zstd block store, and broadcasted in real time to connected WebSocket dashboards.
+
+### Scenario 8: Edge-to-Server Wire Compression & Network Bandwidth Savings
+- **Observation**: High log volume from multiple agents causes significant network egress or server ingest bandwidth saturation.
+- **Behavior**: Agents stream log batches using Zstandard Level 3 compression (`Content-Encoding: zstd`, or optional `gzip`), reducing payload size by 70–85%. The central server inspects `Content-Encoding`, decompresses payloads on the fly with a 10MB decompression ceiling, and gracefully handles uncompressed requests.
+
 

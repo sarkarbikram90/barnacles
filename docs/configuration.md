@@ -39,7 +39,8 @@ storage:
   directory: "./data/logs"          # Path for time-segmented log files
   sync_on_write: false              # Call fsync() on every append write
   # Format: Hourly partitions with 64KB Zstandard (Level 3) compressed blocks
-  # Companion index.json manifests store min/max timestamps and level bitmasks for query pruning
+  # Companion index.jsonl append-only manifests store block boundaries, timestamps,
+  # and level bitmasks for query pruning (with automatic fallback to legacy index.json)
 
 stream:
   recent_events: 10000              # In-memory recent ring buffer capacity
@@ -68,6 +69,7 @@ agent:
 server:
   url: "http://localhost:8080"      # Central server URL
   token: ${BARNACLES_AUTH_TOKEN}    # Optional Bearer auth token
+  compression: "zstd"               # Wire compression: "zstd", "gzip", or "none" (default: "zstd")
   timeout: 10s                      # HTTP request timeout
   insecure_skip_verify: false       # Skip TLS verification (testing only)
 

@@ -50,7 +50,8 @@ Agent Node (Server A)                          Central Server
          v                                    |                                                 |
 +--------+---------+   HTTP POST /api/v1/ingest|  +------------------+                           |
 | Ingest Sender    +------------------------->|  | Ingest Handler   |                           |
-| & Retry Backoff  |   or OTLP POST /v1/logs  |  | & Dedup LRU Cache|                           |
+| & (Zstd/Gzip Wire|   (zstd/gzip compressed) |  | & Decompression  |                           |
+|  Compression)    |   or OTLP POST /v1/logs  |  | & Dedup LRU Cache|                           |
 +---+----------+---+                          |  +--------+---------+                           |
     |          ^                              |           |                                     |
     | On       | Drain                        |     +-----+----------------+                    |
@@ -58,7 +59,7 @@ Agent Node (Server A)                          Central Server
     v          |                              |     v                      v                    |
 +---+----------+---+                          |  +--+---------------+   +--+---------------+    |
 | Durable Spool    |                          |  | Zstd Block Store |   | WebSocket Hub    |    |
-| (.inflight lease)|                          |  | + index.json     |   | & Recent Buffer  |    |
+| (.inflight lease)|                          |  | + index.jsonl    |   | (Batch Broadcast)|    |
 | (Strict FIFO)    |                          |  | (Pruned Queries) |   | (Non-blocking)   |    |
 +------------------+                          |  +--------+---------+   +--------+---------+    |
                                               |           |                      |              |
@@ -85,10 +86,11 @@ Barnacles is intentionally designed as a lightweight, operationally simple log a
 
 - **Crash-Safe Edge File Tailing**: Persistent watermark checkpoints (`device_id`, `file_identity/inode`, `byte_offset`) committed atomically to disk; automatically survives agent crashes, hard reboots, and log file rotations (`app.log` -> `app.log.1`).
 - **Peek -> Send -> Commit Disk Spooling**: Batches are never unlinked before central server ACK. In-flight leases are recovered on crash restart, fsync writes ensure crash durability, and strict FIFO order is preserved across network partitions.
-- **Zstandard Compressed Block Storage**: Server storage organizes hourly partitions into Zstandard-compressed blocks (level 3) with companion `index.json` metadata manifests, enabling pre-decompression query pruning by time range and log level bitmasks.
+- **Edge-to-Server Wire Compression**: Payloads are compressed with Zstandard Level 3 (or gzip) prior to HTTP transmission, reducing network egress bandwidth by 70–85% with server-side decompression bomb guards.
+- **Append-Only Block Storage**: Server storage organizes hourly partitions into Zstandard-compressed blocks (level 3) with $O(1)$ append-only `index.jsonl` manifests (and legacy `index.json` backwards compatibility) plus an in-memory index cache, eliminating $O(N)$ write amplification and enabling pre-decompression query pruning by time range and log level bitmasks.
 - **OpenTelemetry Native Ingestion**: Supports standard OTLP/HTTP JSON (`POST /v1/logs`) as well as native Barnacles batches (`POST /api/v1/ingest`) with sliding-window LRU deduplication.
 - **Flexible Log Parsing**: Built-in parsers for Plain Text, JSON logs, and Named Regexp capture groups, with an auto-detecting parser that preserves unparseable lines.
-- **Real-Time WebSocket Streaming**: Non-blocking broadcast with ring buffer recent replay and slow-client disconnect protection.
+- **High-Throughput WebSocket Streaming**: Batch-oriented WebSocket delivery (`log_batch`) eliminating per-message framing overhead, non-blocking broadcasts with ring buffer recent replay, and slow-client disconnect protection.
 - **Modern Web Dashboard**: Real-time stats, log level coloring, interactive filters (host, source, level, text search), and event inspector modal.
 - **Production Observability**: Full Prometheus metrics endpoints (`/metrics`) and health checks (`/healthz`, `/readyz`) on both Agent and Server.
 
@@ -209,7 +211,9 @@ All configurations support environment variable substitution (e.g. `${BARNACLES_
 - [x] OpenTelemetry native ingestion (`POST /v1/logs` HTTP/JSON).
 - [x] Persistent watermark tailer checkpoints (`device_id`, `inode`, `offset`).
 - [x] Non-destructive two-phase spool lease (`Peek` $\to$ `Send` $\to$ `Commit`).
-- [x] Zstandard block storage with `index.json` partition metadata manifests.
+- [x] Zstandard block storage with $O(1)$ append-only `index.jsonl` manifests.
+- [x] Edge-to-server transparent wire compression (`Content-Encoding: zstd` / `gzip`).
+- [x] High-throughput batch-oriented WebSocket streaming (`log_batch`).
 - [ ] Agent dynamic log discovery via glob patterns (`/var/log/**/*.log`).
 - [ ] Kernel-level file notifications (`inotify` / `ReadDirectoryChangesW`).
 - [ ] Long-term object storage tiering (S3 / GCS / Azure Blob).
