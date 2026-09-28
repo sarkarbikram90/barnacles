@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -262,3 +264,116 @@ func TestRetentionWorker(t *testing.T) {
 		t.Fatalf("retention worker did not exit on cancel")
 	}
 }
+
+func TestAppendOnlyIndexJSONL(t *testing.T) {
+	tempDir := t.TempDir()
+	partitionDir := filepath.Join(tempDir, "2026", "09", "28", "15")
+
+	h1 := BlockHeader{
+		ID:               "blk-1",
+		FileName:         "block_1.zst",
+		MinTimestampNano: 1000,
+		MaxTimestampNano: 2000,
+		RecordCount:      10,
+		Hosts:            []string{"host-a"},
+		Sources:          []string{"src-a"},
+	}
+	h2 := BlockHeader{
+		ID:               "blk-2",
+		FileName:         "block_2.zst",
+		MinTimestampNano: 2001,
+		MaxTimestampNano: 3000,
+		RecordCount:      20,
+		Hosts:            []string{"host-b"},
+		Sources:          []string{"src-b"},
+	}
+
+	if err := AppendBlockToPartition(partitionDir, h1, []byte("data1"), false); err != nil {
+		t.Fatalf("first append failed: %v", err)
+	}
+	if err := AppendBlockToPartition(partitionDir, h2, []byte("data2"), false); err != nil {
+		t.Fatalf("second append failed: %v", err)
+	}
+
+	// Verify index.jsonl exists and has 2 lines
+	jsonlPath := filepath.Join(partitionDir, "index.jsonl")
+	data, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatalf("read index.jsonl failed: %v", err)
+	}
+	lines := 0
+	for _, b := range data {
+		if b == '\n' {
+			lines++
+		}
+	}
+	if lines != 2 {
+		t.Fatalf("expected 2 lines in index.jsonl, got %d", lines)
+	}
+
+	// Load partition index
+	headers, err := LoadPartitionIndex(partitionDir)
+	if err != nil {
+		t.Fatalf("LoadPartitionIndex failed: %v", err)
+	}
+	if len(headers) != 2 {
+		t.Fatalf("expected 2 headers, got %d", len(headers))
+	}
+	if headers[0].ID != "blk-1" || headers[1].ID != "blk-2" {
+		t.Fatalf("unexpected headers order or content: %+v", headers)
+	}
+}
+
+func TestLegacyIndexJSONBackwardsCompatibility(t *testing.T) {
+	tempDir := t.TempDir()
+	partitionDir := filepath.Join(tempDir, "2026", "09", "28", "15")
+	if err := os.MkdirAll(partitionDir, 0o750); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	legacyHeader := BlockHeader{
+		ID:               "legacy-1",
+		FileName:         "block_legacy.zst",
+		MinTimestampNano: 500,
+		MaxTimestampNano: 999,
+		RecordCount:      5,
+		Hosts:            []string{"legacy-host"},
+		Sources:          []string{"legacy-src"},
+	}
+
+	// Write legacy index.json
+	legacyJSON, err := json.Marshal([]BlockHeader{legacyHeader})
+	if err != nil {
+		t.Fatalf("marshal legacy header failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(partitionDir, "index.json"), legacyJSON, 0o600); err != nil {
+		t.Fatalf("write legacy index.json failed: %v", err)
+	}
+
+	// Append a new block using AppendBlockToPartition (writes index.jsonl)
+	newHeader := BlockHeader{
+		ID:               "new-1",
+		FileName:         "block_new.zst",
+		MinTimestampNano: 1000,
+		MaxTimestampNano: 1500,
+		RecordCount:      15,
+		Hosts:            []string{"new-host"},
+		Sources:          []string{"new-src"},
+	}
+	if err := AppendBlockToPartition(partitionDir, newHeader, []byte("newdata"), false); err != nil {
+		t.Fatalf("AppendBlockToPartition failed: %v", err)
+	}
+
+	// LoadPartitionIndex should seamlessly load both legacy and new headers
+	headers, err := LoadPartitionIndex(partitionDir)
+	if err != nil {
+		t.Fatalf("LoadPartitionIndex failed: %v", err)
+	}
+	if len(headers) != 2 {
+		t.Fatalf("expected 2 headers from combined legacy and new index, got %d", len(headers))
+	}
+	if headers[0].ID != "legacy-1" || headers[1].ID != "new-1" {
+		t.Fatalf("unexpected headers order: %+v", headers)
+	}
+}
+

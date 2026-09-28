@@ -28,11 +28,12 @@ type FileStore struct {
 	rootDir     string
 	syncOnWrite bool
 
-	mu         sync.RWMutex
-	closed     bool
-	totalBytes int64
-	knownHosts map[string]struct{}
-	knownSrcs  map[string]struct{}
+	mu             sync.RWMutex
+	closed         bool
+	totalBytes     int64
+	knownHosts     map[string]struct{}
+	knownSrcs      map[string]struct{}
+	partitionCache map[string][]BlockHeader
 }
 
 // Compile-time interface check.
@@ -55,10 +56,11 @@ func NewFileStore(cfg Config) (*FileStore, error) {
 	}
 
 	fsStore := &FileStore{
-		rootDir:     cfg.Directory,
-		syncOnWrite: cfg.SyncOnWrite,
-		knownHosts:  make(map[string]struct{}),
-		knownSrcs:   make(map[string]struct{}),
+		rootDir:        cfg.Directory,
+		syncOnWrite:    cfg.SyncOnWrite,
+		knownHosts:     make(map[string]struct{}),
+		knownSrcs:      make(map[string]struct{}),
+		partitionCache: make(map[string][]BlockHeader),
 	}
 
 	if err := fsStore.scanInitial(); err != nil {
@@ -70,6 +72,7 @@ func NewFileStore(cfg Config) (*FileStore, error) {
 
 func (s *FileStore) scanInitial() error {
 	var total int64
+	visitedPartitions := make(map[string]struct{})
 
 	err := filepath.WalkDir(s.rootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -84,19 +87,24 @@ func (s *FileStore) scanInitial() error {
 			total += info.Size()
 		}
 
-		// Load headers from index.json to populate known hosts and sources
-		if d.Name() == indexFileName {
-			headers, err := LoadPartitionIndex(filepath.Dir(path))
-			if err == nil {
-				for _, h := range headers {
-					for _, host := range h.Hosts {
-						if host != "" {
-							s.knownHosts[host] = struct{}{}
+		// Load headers from index to populate known hosts, sources, and partition cache
+		if d.Name() == indexJSONLFileName || d.Name() == indexJSONFileName {
+			dir := filepath.Dir(path)
+			if _, visited := visitedPartitions[dir]; !visited {
+				visitedPartitions[dir] = struct{}{}
+				headers, err := LoadPartitionIndex(dir)
+				if err == nil {
+					s.partitionCache[dir] = headers
+					for _, h := range headers {
+						for _, host := range h.Hosts {
+							if host != "" {
+								s.knownHosts[host] = struct{}{}
+							}
 						}
-					}
-					for _, src := range h.Sources {
-						if src != "" {
-							s.knownSrcs[src] = struct{}{}
+						for _, src := range h.Sources {
+							if src != "" {
+								s.knownSrcs[src] = struct{}{}
+							}
 						}
 					}
 				}
@@ -171,10 +179,30 @@ func (s *FileStore) Append(ctx context.Context, entries []logentry.LogEntry) err
 			return fmt.Errorf("append block to partition %q: %w", dir, err)
 		}
 
+		s.partitionCache[dir] = append(s.partitionCache[dir], header)
 		s.totalBytes += header.CompressedBytes
 	}
 
 	return nil
+}
+
+func (s *FileStore) getPartitionHeaders(dir string) []BlockHeader {
+	s.mu.RLock()
+	cached, ok := s.partitionCache[dir]
+	s.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	headers, err := LoadPartitionIndex(dir)
+	if err != nil || len(headers) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	s.partitionCache[dir] = headers
+	s.mu.Unlock()
+	return headers
 }
 
 // Query searches stored log files using block-pruning across partition indices.
@@ -207,9 +235,9 @@ func (s *FileStore) Query(ctx context.Context, q logentry.Query) ([]logentry.Log
 			break
 		}
 
-		// Read partition index for pre-decompression block pruning
-		headers, err := LoadPartitionIndex(dir)
-		if err == nil && len(headers) > 0 {
+		// Read partition index for pre-decompression block pruning (from memory cache or disk)
+		headers := s.getPartitionHeaders(dir)
+		if len(headers) > 0 {
 			// Iterate blocks in reverse order (newest blocks first)
 			for i := len(headers) - 1; i >= 0; i-- {
 				if ctx.Err() != nil {
@@ -448,6 +476,10 @@ func (s *FileStore) Prune(ctx context.Context, maxAge time.Duration, maxSizeByte
 				s.totalBytes -= fileSize
 			}
 		}
+	}
+
+	if deleted > 0 {
+		s.partitionCache = make(map[string][]BlockHeader)
 	}
 
 	return deleted, freed, nil
