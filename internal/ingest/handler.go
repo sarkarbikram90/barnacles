@@ -1,17 +1,43 @@
 package ingest
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/config"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 	"github.com/sarkarbikram90/barnacles/internal/metrics"
 	"github.com/sarkarbikram90/barnacles/internal/store"
 	"github.com/sarkarbikram90/barnacles/internal/stream"
 )
+
+func decompressReader(r io.Reader, encoding string) (io.Reader, func(), error) {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "zstd":
+		zr, err := zstd.NewReader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("init zstd reader: %w", err)
+		}
+		return zr, zr.Close, nil
+	case "gzip":
+		gr, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("init gzip reader: %w", err)
+		}
+		return gr, func() { _ = gr.Close() }, nil
+	case "", "identity":
+		return r, func() {}, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported content encoding: %s", encoding)
+	}
+}
 
 // Handler processes log ingestion HTTP requests for both Barnacles batch API and OpenTelemetry /v1/logs.
 type Handler struct {
@@ -60,8 +86,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
+	decompressedBody, closeDecompressor, err := decompressReader(r.Body, r.Header.Get("Content-Encoding"))
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.IngestErrorsTotal.Inc()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+			Status: "error",
+			Errors: []string{"decompression error: " + err.Error()},
+		})
+		return
+	}
+	defer closeDecompressor()
+
 	var req logentry.IngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(decompressedBody, 50*1024*1024)).Decode(&req); err != nil {
 		if h.metrics != nil {
 			h.metrics.IngestErrorsTotal.Inc()
 		}
@@ -139,7 +180,19 @@ func (h *Handler) ServeOTLP(w http.ResponseWriter, r *http.Request) {
 	maxBytes := int64(10 * 1024 * 1024)
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
-	entries, err := ParseOTLPLogsJSON(r.Body)
+	decompressedBody, closeDecompressor, err := decompressReader(r.Body, r.Header.Get("Content-Encoding"))
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.IngestErrorsTotal.Inc()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "decompression error: " + err.Error()})
+		return
+	}
+	defer closeDecompressor()
+
+	entries, err := ParseOTLPLogsJSON(io.LimitReader(decompressedBody, 50*1024*1024))
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.IngestErrorsTotal.Inc()

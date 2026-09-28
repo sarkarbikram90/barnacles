@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/config"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 	"github.com/sarkarbikram90/barnacles/internal/metrics"
@@ -164,3 +166,73 @@ func TestDedupCacheCapacity(t *testing.T) {
 	// Adding 6th should trigger eviction and not panic
 	cache.IsDuplicate("Z")
 }
+
+func TestIngestCompressedZstdAndGzip(t *testing.T) {
+	tempDir := t.TempDir()
+	st, err := store.NewFileStore(store.Config{Directory: tempDir})
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	defer st.Close()
+
+	handler := NewHandler(config.IngestSettings{
+		MaxBatchEvents:  100,
+		MaxMessageBytes: 1024 * 1024,
+	}, st, nil, nil)
+
+	payload := logentry.IngestRequest{
+		AgentID: "agent-compress",
+		Events: []logentry.LogEntry{
+			logentry.New("host1", "syslog", "INFO", "compressed message", nil),
+		},
+	}
+	rawJSON, _ := json.Marshal(payload)
+
+	// 1. Test zstd compressed ingest
+	var zstdBuf bytes.Buffer
+	zw, _ := zstd.NewWriter(&zstdBuf)
+	_, _ = zw.Write(rawJSON)
+	_ = zw.Close()
+
+	recZstd := httptest.NewRecorder()
+	reqZstd := httptest.NewRequest(http.MethodPost, "/api/v1/ingest", &zstdBuf)
+	reqZstd.Header.Set("Content-Type", "application/json")
+	reqZstd.Header.Set("Content-Encoding", "zstd")
+	handler.ServeHTTP(recZstd, reqZstd)
+
+	if recZstd.Code != http.StatusOK {
+		t.Fatalf("zstd ingest failed, status=%d, body=%s", recZstd.Code, recZstd.Body.String())
+	}
+	var respZstd logentry.IngestResponse
+	_ = json.NewDecoder(recZstd.Body).Decode(&respZstd)
+	if respZstd.Accepted != 1 {
+		t.Errorf("expected 1 accepted for zstd, got %d", respZstd.Accepted)
+	}
+
+	// 2. Test gzip compressed ingest
+	var gzipBuf bytes.Buffer
+	gw := gzip.NewWriter(&gzipBuf)
+	_, _ = gw.Write(rawJSON)
+	_ = gw.Close()
+
+	recGzip := httptest.NewRecorder()
+	reqGzip := httptest.NewRequest(http.MethodPost, "/api/v1/ingest", &gzipBuf)
+	reqGzip.Header.Set("Content-Type", "application/json")
+	reqGzip.Header.Set("Content-Encoding", "gzip")
+	handler.ServeHTTP(recGzip, reqGzip)
+
+	if recGzip.Code != http.StatusOK {
+		t.Fatalf("gzip ingest failed, status=%d, body=%s", recGzip.Code, recGzip.Body.String())
+	}
+
+	// 3. Test unsupported content encoding
+	recBad := httptest.NewRecorder()
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/v1/ingest", bytes.NewReader(rawJSON))
+	reqBad.Header.Set("Content-Encoding", "invalid-compressor")
+	handler.ServeHTTP(recBad, reqBad)
+
+	if recBad.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request for unsupported encoding, got %d", recBad.Code)
+	}
+}
+

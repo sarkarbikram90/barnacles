@@ -4,6 +4,7 @@ package sender
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 )
 
@@ -28,9 +30,10 @@ var ErrTemporary = errors.New("temporary retryable error")
 
 // Sender sends batched log events to the central Barnacles server.
 type Sender struct {
-	targetURL  string
-	token      string
-	httpClient *http.Client
+	targetURL   string
+	token       string
+	compression string
+	httpClient  *http.Client
 }
 
 // Config defines connection parameters for the Sender.
@@ -39,6 +42,7 @@ type Config struct {
 	Token              string
 	Timeout            time.Duration
 	InsecureSkipVerify bool
+	Compression        string // "zstd", "gzip", "none" (default: "zstd")
 }
 
 // New creates a new configured Sender.
@@ -76,9 +80,12 @@ func New(cfg Config) (*Sender, error) {
 		ingestURL += "/api/v1/ingest"
 	}
 
+	compression := strings.ToLower(strings.TrimSpace(cfg.Compression))
+
 	return &Sender{
-		targetURL: ingestURL,
-		token:     cfg.Token,
+		targetURL:   ingestURL,
+		token:       cfg.Token,
+		compression: compression,
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -102,12 +109,37 @@ func (s *Sender) Send(ctx context.Context, agentID string, events []logentry.Log
 		return nil, fmt.Errorf("%w: marshal request payload: %v", ErrPermanent, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.targetURL, bytes.NewReader(bodyBytes))
+	var reqBody io.Reader = bytes.NewReader(bodyBytes)
+	var contentEncoding string
+
+	switch s.compression {
+	case "zstd":
+		var buf bytes.Buffer
+		enc, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		if err == nil {
+			if _, err := enc.Write(bodyBytes); err == nil && enc.Close() == nil {
+				reqBody = &buf
+				contentEncoding = "zstd"
+			}
+		}
+	case "gzip":
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write(bodyBytes); err == nil && gw.Close() == nil {
+			reqBody = &buf
+			contentEncoding = "gzip"
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.targetURL, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create http request: %v", ErrPermanent, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
+	}
 	if s.token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 	}

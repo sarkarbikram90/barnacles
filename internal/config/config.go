@@ -196,6 +196,7 @@ type ServerTarget struct {
 	Token              string        `yaml:"token"`
 	Timeout            time.Duration `yaml:"timeout"`
 	InsecureSkipVerify bool          `yaml:"insecure_skip_verify"`
+	Compression        string        `yaml:"compression"`
 }
 
 // BatchSettings configures batching before delivery.
@@ -245,8 +246,9 @@ func DefaultAgentConfig() AgentConfig {
 			MetricsAddress: ":9090",
 		},
 		Server: ServerTarget{
-			URL:     "http://localhost:8080",
-			Timeout: 10 * time.Second,
+			URL:         "http://localhost:8080",
+			Timeout:     10 * time.Second,
+			Compression: "zstd",
 		},
 		Batch: BatchSettings{
 			MaxEvents:      500,

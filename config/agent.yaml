@@ -9,6 +9,7 @@ server:
   token: ${BARNACLES_AUTH_TOKEN:-}
   timeout: 10s
   insecure_skip_verify: false
+  compression: ${BARNACLES_COMPRESSION:-zstd}
 
 batch:
   max_events: 500

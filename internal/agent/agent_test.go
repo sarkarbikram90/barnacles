@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/config"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 	"github.com/sarkarbikram90/barnacles/internal/metrics"
@@ -226,3 +227,85 @@ func TestAgentSpoolAndDrainOnOutage(t *testing.T) {
 		t.Fatalf("shutdown timed out")
 	}
 }
+
+func TestAgentDeliveryWithZstdCompression(t *testing.T) {
+	var (
+		receivedEncoding atomic.Value
+		receivedTotal    atomic.Int64
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedEncoding.Store(r.Header.Get("Content-Encoding"))
+		zr, err := zstd.NewReader(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer zr.Close()
+
+		var req logentry.IngestRequest
+		if err := json.NewDecoder(zr).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		receivedTotal.Add(int64(len(req.Events)))
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+			Status:   "ok",
+			Accepted: len(req.Events),
+		})
+	}))
+	defer srv.Close()
+
+	tempDir := t.TempDir()
+	logFile := filepath.Join(tempDir, "compressed.log")
+	_ = os.WriteFile(logFile, []byte(""), 0o600)
+
+	cfg := config.AgentConfig{
+		Agent: config.AgentSettings{ID: "zstd-agent", Host: "node-z"},
+		Server: config.ServerTarget{
+			URL:         srv.URL,
+			Timeout:     2 * time.Second,
+			Compression: "zstd",
+		},
+		Batch: config.BatchSettings{
+			MaxEvents:     2,
+			FlushInterval: 50 * time.Millisecond,
+		},
+		Sources: []config.SourceConfig{
+			{Name: "app", Path: logFile, Format: "text", StartPosition: "beginning"},
+		},
+	}
+
+	ag, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New(agent) failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	agentDone := make(chan error, 1)
+	go func() {
+		agentDone <- ag.Start(ctx)
+	}()
+
+	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	_, _ = f.WriteString("log entry compressed 1\nlog entry compressed 2\n")
+	_ = f.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for receivedTotal.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if receivedTotal.Load() < 2 {
+		t.Fatalf("expected 2 compressed events delivered, got %d", receivedTotal.Load())
+	}
+	if enc, ok := receivedEncoding.Load().(string); !ok || enc != "zstd" {
+		t.Errorf("expected Content-Encoding zstd, got: %v", receivedEncoding.Load())
+	}
+
+	cancel()
+	<-agentDone
+}
+

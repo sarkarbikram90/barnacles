@@ -1,27 +1,58 @@
 package sender
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 )
+
+func decodeBody(r *http.Request) (logentry.IngestRequest, error) {
+	var bodyReader io.Reader = r.Body
+	switch r.Header.Get("Content-Encoding") {
+	case "zstd":
+		zr, err := zstd.NewReader(r.Body)
+		if err != nil {
+			return logentry.IngestRequest{}, err
+		}
+		defer zr.Close()
+		bodyReader = zr
+	case "gzip":
+		gr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return logentry.IngestRequest{}, err
+		}
+		defer gr.Close()
+		bodyReader = gr
+	}
+
+	var req logentry.IngestRequest
+	err := json.NewDecoder(bodyReader).Decode(&req)
+	return req, err
+}
 
 func TestSenderSuccessWithToken(t *testing.T) {
 	var receivedToken string
 	var receivedReq logentry.IngestRequest
+	var receivedEncoding string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedToken = r.Header.Get("Authorization")
-		if err := json.NewDecoder(r.Body).Decode(&receivedReq); err != nil {
+		receivedEncoding = r.Header.Get("Content-Encoding")
+		req, err := decodeBody(r)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		receivedReq = req
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
 			Status:   "ok",
@@ -31,8 +62,9 @@ func TestSenderSuccessWithToken(t *testing.T) {
 	defer srv.Close()
 
 	snd, err := New(Config{
-		URL:   srv.URL,
-		Token: "secret-token-123",
+		URL:         srv.URL,
+		Token:       "secret-token-123",
+		Compression: "zstd",
 	})
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
@@ -53,8 +85,71 @@ func TestSenderSuccessWithToken(t *testing.T) {
 	if receivedToken != "Bearer secret-token-123" {
 		t.Errorf("unexpected token header: %s", receivedToken)
 	}
+	if receivedEncoding != "zstd" {
+		t.Errorf("expected Content-Encoding zstd, got: %s", receivedEncoding)
+	}
 	if len(receivedReq.Events) != 1 || receivedReq.Events[0].Message != "hello world" {
 		t.Errorf("unexpected received payload: %+v", receivedReq)
+	}
+}
+
+func TestSenderCompressionModes(t *testing.T) {
+	modes := []struct {
+		compression      string
+		expectedEncoding string
+	}{
+		{"zstd", "zstd"},
+		{"gzip", "gzip"},
+		{"none", ""},
+	}
+
+	for _, m := range modes {
+		t.Run("mode_"+m.compression, func(t *testing.T) {
+			var receivedEncoding string
+			var receivedReq logentry.IngestRequest
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				receivedEncoding = r.Header.Get("Content-Encoding")
+				req, err := decodeBody(r)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				receivedReq = req
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+					Status:   "ok",
+					Accepted: len(receivedReq.Events),
+				})
+			}))
+			defer srv.Close()
+
+			snd, err := New(Config{
+				URL:         srv.URL,
+				Compression: m.compression,
+			})
+			if err != nil {
+				t.Fatalf("New failed: %v", err)
+			}
+
+			events := []logentry.LogEntry{
+				logentry.New("node1", "app", "WARN", "compression test message", nil),
+			}
+
+			resp, err := snd.Send(context.Background(), "agent-c", events)
+			if err != nil {
+				t.Fatalf("Send failed: %v", err)
+			}
+			if resp.Accepted != 1 {
+				t.Errorf("expected 1 accepted, got %d", resp.Accepted)
+			}
+			if receivedEncoding != m.expectedEncoding {
+				t.Errorf("expected encoding %q, got %q", m.expectedEncoding, receivedEncoding)
+			}
+			if len(receivedReq.Events) != 1 || receivedReq.Events[0].Message != "compression test message" {
+				t.Errorf("unexpected payload: %+v", receivedReq)
+			}
+		})
 	}
 }
 

@@ -47,6 +47,7 @@ func New(cfg config.AgentConfig, m *metrics.AgentMetrics) (*Agent, error) {
 		Token:              cfg.Server.Token,
 		Timeout:            cfg.Server.Timeout,
 		InsecureSkipVerify: cfg.Server.InsecureSkipVerify,
+		Compression:        cfg.Server.Compression,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sender: %w", err)
