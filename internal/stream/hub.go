@@ -137,7 +137,7 @@ func (h *Hub) Broadcast(entries []logentry.LogEntry) {
 		return
 	}
 
-	var slowClients []*Client
+	slowClients := make(map[*Client]struct{})
 
 	for _, entry := range entries {
 		msg := Message{
@@ -146,13 +146,59 @@ func (h *Hub) Broadcast(entries []logentry.LogEntry) {
 		}
 
 		for client := range h.clients {
+			if _, alreadySlow := slowClients[client]; alreadySlow {
+				continue
+			}
 			if !client.SendMessage(msg) {
-				slowClients = append(slowClients, client)
+				slowClients[client] = struct{}{}
 			}
 		}
 	}
 
-	// Disconnect slow clients whose buffers filled up
+	// Disconnect slow clients whose buffers filled up (exactly once per slow client)
+	for slow := range slowClients {
+		if _, ok := h.clients[slow]; ok {
+			delete(h.clients, slow)
+			close(slow.send)
+			if h.metrics != nil {
+				h.metrics.WebsocketDisconnectsTotal.WithLabelValues("buffer_overflow").Inc()
+			}
+		}
+	}
+
+	if h.metrics != nil {
+		h.metrics.WebsocketClients.Set(float64(len(h.clients)))
+		h.metrics.EventsBroadcastTotal.Add(float64(len(entries)))
+	}
+}
+
+// BroadcastBatch dispatches an entire slice of log entries as a single WebSocket message (Type: "log_batch")
+// to drastically reduce per-message framing overhead on high-throughput ingest pipelines.
+func (h *Hub) BroadcastBatch(entries []logentry.LogEntry) {
+	if len(entries) == 0 {
+		return
+	}
+
+	h.recentBuffer.AddBatch(entries)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+
+	msg := Message{
+		Type: "log_batch",
+		Data: entries,
+	}
+
+	var slowClients []*Client
+	for client := range h.clients {
+		if !client.SendMessage(msg) {
+			slowClients = append(slowClients, client)
+		}
+	}
+
 	for _, slow := range slowClients {
 		if _, ok := h.clients[slow]; ok {
 			delete(h.clients, slow)

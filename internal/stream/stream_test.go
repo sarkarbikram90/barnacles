@@ -145,3 +145,53 @@ func TestHubSlowClientDisconnect(t *testing.T) {
 		t.Fatalf("expected slow client to be disconnected, got client count %d", hub.ClientCount())
 	}
 }
+
+func TestHubBroadcastBatch(t *testing.T) {
+	m := metrics.NewServerMetrics()
+	cfg := config.StreamSettings{
+		RecentEvents:     100,
+		MaxClients:       10,
+		ClientBufferSize: 64,
+		PingInterval:     time.Second,
+		WriteDeadline:    time.Second,
+	}
+
+	hub := NewHub(cfg, nil, m)
+	defer hub.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = hub.Upgrade(w, r)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("websocket dial failed: %v", err)
+	}
+	defer ws.Close()
+
+	// Drain initial recent_batch
+	_, _, _ = ws.ReadMessage()
+
+	// Broadcast batch
+	hub.BroadcastBatch([]logentry.LogEntry{
+		logentry.New("node1", "svc", "INFO", "batch msg 1", nil),
+		logentry.New("node1", "svc", "INFO", "batch msg 2", nil),
+	})
+
+	_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, batchData, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("read batch message failed: %v", err)
+	}
+
+	var batchMsg Message
+	if err := json.Unmarshal(batchData, &batchMsg); err != nil {
+		t.Fatalf("unmarshal batch message failed: %v", err)
+	}
+	if batchMsg.Type != "log_batch" {
+		t.Errorf("expected type 'log_batch', got %s", batchMsg.Type)
+	}
+}
+

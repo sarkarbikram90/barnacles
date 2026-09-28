@@ -164,6 +164,11 @@
       for (const entry of msg.data) {
         ingestLogEntry(entry, false);
       }
+    } else if ((msg.type === 'log_batch' || msg.type === 'batch') && Array.isArray(msg.data)) {
+      for (const entry of msg.data) {
+        ingestLogEntry(entry, true);
+        rateCounter++;
+      }
     }
   }
 
