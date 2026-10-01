@@ -61,7 +61,6 @@ const (
 	faultHTTP500                 // Return 500 Internal Server Error
 	faultSlowResponse            // Respond after a delay
 	faultConnReset               // Close connection without response
-	faultHTTP400                 // Return 400 Bad Request (permanent, non-retryable)
 	faultRandomLatency           // Add random latency 0-500ms
 )
 
@@ -71,7 +70,6 @@ type faultServer struct {
 	mode          faultMode
 	delay         time.Duration
 	receivedSeqs  []int
-	receivedMsgs  []string
 	receivedCount atomic.Int64
 	reqCount      atomic.Int64
 	server        *httptest.Server
@@ -114,9 +112,6 @@ func (fs *faultServer) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return
-	case faultHTTP400:
-		http.Error(w, "permanently rejected", http.StatusBadRequest)
-		return
 	case faultRandomLatency:
 		jitter := time.Duration(rand.Intn(500)) * time.Millisecond //nolint:gosec
 		time.Sleep(jitter)
@@ -130,7 +125,6 @@ func (fs *faultServer) handler(w http.ResponseWriter, r *http.Request) {
 
 	fs.mu.Lock()
 	for _, e := range req.Events {
-		fs.receivedMsgs = append(fs.receivedMsgs, e.Message)
 		// Extract sequence number from messages like "seq-042"
 		parts := strings.Split(e.Message, "-")
 		if len(parts) == 2 {
@@ -163,14 +157,6 @@ func (fs *faultServer) getSeqs() []int {
 	defer fs.mu.Unlock()
 	cp := make([]int, len(fs.receivedSeqs))
 	copy(cp, fs.receivedSeqs)
-	return cp
-}
-
-func (fs *faultServer) getMsgs() []string {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	cp := make([]string, len(fs.receivedMsgs))
-	copy(cp, fs.receivedMsgs)
 	return cp
 }
 
