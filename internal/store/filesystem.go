@@ -286,6 +286,52 @@ func (s *FileStore) Query(ctx context.Context, q logentry.Query) ([]logentry.Log
 }
 
 func (s *FileStore) collectCandidateDirs(q logentry.Query) ([]string, error) {
+	// Fast path: when both time bounds are provided, generate partition paths
+	// mathematically rather than walking the entire storage tree.
+	// This changes cost from O(total_history) to O(query_window_hours).
+	if !q.StartTime.IsZero() && !q.EndTime.IsZero() {
+		return s.generateCandidateDirs(q.StartTime, q.EndTime), nil
+	}
+
+	// If only one bound is provided, use it to cap the walk
+	if !q.StartTime.IsZero() || !q.EndTime.IsZero() {
+		return s.walkAndFilterDirs(q)
+	}
+
+	// Unbounded query: walk the entire tree (sorted newest first)
+	return s.walkAllDirs()
+}
+
+// generateCandidateDirs produces hourly partition paths by iterating from
+// startTime to endTime in 1-hour increments and checking existence via os.Stat.
+// Returns directories sorted newest-first for query result ordering.
+func (s *FileStore) generateCandidateDirs(startTime, endTime time.Time) []string {
+	// Truncate start to hour boundary
+	start := startTime.UTC().Truncate(time.Hour)
+	end := endTime.UTC()
+
+	var dirs []string
+	for t := start; !t.After(end); t = t.Add(time.Hour) {
+		dir := filepath.Join(
+			s.rootDir,
+			t.Format("2006"),
+			t.Format("01"),
+			t.Format("02"),
+			t.Format("15"),
+		)
+		if _, err := os.Stat(dir); err == nil {
+			dirs = append(dirs, dir)
+		}
+	}
+
+	// Sort newest first for query result ordering
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i] > dirs[j]
+	})
+	return dirs
+}
+
+func (s *FileStore) walkAllDirs() ([]string, error) {
 	var allDirs []string
 
 	err := filepath.WalkDir(s.rootDir, func(path string, d fs.DirEntry, err error) error {
@@ -293,7 +339,6 @@ func (s *FileStore) collectCandidateDirs(q logentry.Query) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
-			// Check if this is an hourly leaf directory: root/YYYY/MM/DD/HH
 			rel, relErr := filepath.Rel(s.rootDir, path)
 			if relErr == nil && len(strings.Split(filepath.ToSlash(rel), "/")) == 4 {
 				allDirs = append(allDirs, path)
@@ -305,14 +350,17 @@ func (s *FileStore) collectCandidateDirs(q logentry.Query) ([]string, error) {
 		return nil, err
 	}
 
-	// Sort lexicographically reverse (newest directories first)
+	// Sort newest first
 	sort.Slice(allDirs, func(i, j int) bool {
 		return allDirs[i] > allDirs[j]
 	})
+	return allDirs, nil
+}
 
-	// Time Partition Pruning: filter directories that are outside [StartTime, EndTime]
-	if q.StartTime.IsZero() && q.EndTime.IsZero() {
-		return allDirs, nil
+func (s *FileStore) walkAndFilterDirs(q logentry.Query) ([]string, error) {
+	allDirs, err := s.walkAllDirs()
+	if err != nil {
+		return nil, err
 	}
 
 	var candidateDirs []string
@@ -325,16 +373,15 @@ func (s *FileStore) collectCandidateDirs(q logentry.Query) ([]string, error) {
 
 		parts := strings.Split(filepath.ToSlash(rel), "/")
 		if len(parts) == 4 {
-			// YYYY/MM/DD/HH
 			layout := "2006/01/02/15"
 			dirTime, parseErr := time.Parse(layout, strings.Join(parts, "/"))
 			if parseErr == nil {
 				dirEnd := dirTime.Add(1 * time.Hour)
 				if !q.StartTime.IsZero() && dirEnd.Before(q.StartTime) {
-					continue // Directory is strictly before query start time
+					continue
 				}
 				if !q.EndTime.IsZero() && dirTime.After(q.EndTime) {
-					continue // Directory is strictly after query end time
+					continue
 				}
 			}
 		}
@@ -430,6 +477,7 @@ func (s *FileStore) DiskUsage() int64 {
 }
 
 // Prune removes old blocks and legacy files exceeding maxAge or maxSizeBytes.
+// After pruning blocks, it also removes orphaned index files and empty partition directories.
 func (s *FileStore) Prune(ctx context.Context, maxAge time.Duration, maxSizeBytes int64) (int, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -480,9 +528,79 @@ func (s *FileStore) Prune(ctx context.Context, maxAge time.Duration, maxSizeByte
 
 	if deleted > 0 {
 		s.partitionCache = make(map[string][]BlockHeader)
+		// Clean up orphaned index files and empty partition directories
+		s.cleanEmptyPartitionsLocked()
 	}
 
 	return deleted, freed, nil
+}
+
+// cleanEmptyPartitionsLocked removes index files and empty directories for partitions
+// that no longer contain any data blocks (.zst or .log files).
+// Must be called with s.mu held.
+func (s *FileStore) cleanEmptyPartitionsLocked() {
+	var emptyDirs []string
+
+	_ = filepath.WalkDir(s.rootDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == s.rootDir {
+			return nil
+		}
+
+		// Only check hourly leaf directories (depth == 4: YYYY/MM/DD/HH)
+		rel, relErr := filepath.Rel(s.rootDir, path)
+		if relErr != nil {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 4 {
+			return nil
+		}
+
+		// Check if any data files remain in this partition
+		hasData := false
+		entries, readErr := os.ReadDir(path)
+		if readErr != nil {
+			return nil
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".zst") || strings.HasSuffix(name, ".log") {
+				hasData = true
+				break
+			}
+		}
+
+		if !hasData {
+			// Remove orphaned index files
+			for _, idxName := range []string{indexJSONLFileName, indexJSONFileName} {
+				idxPath := filepath.Join(path, idxName)
+				if info, statErr := os.Stat(idxPath); statErr == nil {
+					s.totalBytes -= info.Size()
+					_ = os.Remove(idxPath)
+				}
+			}
+			// Remove any remaining temp files
+			for _, entry := range entries {
+				_ = os.Remove(filepath.Join(path, entry.Name()))
+			}
+			emptyDirs = append(emptyDirs, path)
+		}
+		return nil
+	})
+
+	// Remove empty directories bottom-up (deepest first so parent removal works)
+	sort.Slice(emptyDirs, func(i, j int) bool {
+		return emptyDirs[i] > emptyDirs[j]
+	})
+	for _, dir := range emptyDirs {
+		_ = os.Remove(dir)
+		// Try to clean up empty parent directories up to rootDir
+		for parent := filepath.Dir(dir); parent != s.rootDir; parent = filepath.Dir(parent) {
+			if err := os.Remove(parent); err != nil {
+				break // Directory not empty; stop ascending
+			}
+		}
+	}
 }
 
 // Close closes the file store.

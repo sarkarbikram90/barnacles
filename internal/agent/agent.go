@@ -251,7 +251,7 @@ func (a *Agent) deliverBatch(ctx context.Context, batch []logentry.LogEntry) {
 	}
 
 	// Try sending directly with a short timeout
-	sendCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	_, err := a.sender.Send(sendCtx, a.cfg.Agent.ID, batch)
 	cancel()
 
@@ -311,7 +311,7 @@ func (a *Agent) spoolDrainWorker(ctx context.Context) {
 			continue
 		}
 
-		sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		_, sendErr := a.sender.Send(sendCtx, a.cfg.Agent.ID, lease.Events)
 		cancel()
 

@@ -3,16 +3,25 @@
 package ingest
 
 import (
+	"container/list"
 	"sync"
 	"time"
 )
 
-// DedupCache is an in-memory, bounded TTL cache to prevent duplicate processing of log entries.
+// dedupEntry represents a single tracked event ID in the LRU dedup cache.
+type dedupEntry struct {
+	id       string
+	seenTime time.Time
+}
+
+// DedupCache is an in-memory, bounded LRU/TTL cache to prevent duplicate processing of log entries.
+// All operations (lookup, insert, eviction) are O(1) amortized.
 type DedupCache struct {
 	mu       sync.Mutex
 	window   time.Duration
 	capacity int
-	entries  map[string]time.Time
+	index    map[string]*list.Element // key -> LRU list element
+	order    *list.List               // front = newest, back = oldest
 }
 
 // NewDedupCache creates a new DedupCache with specified TTL window and maximum capacity.
@@ -26,12 +35,13 @@ func NewDedupCache(window time.Duration, capacity int) *DedupCache {
 	return &DedupCache{
 		window:   window,
 		capacity: capacity,
-		entries:  make(map[string]time.Time, 1024),
+		index:    make(map[string]*list.Element, 1024),
+		order:    list.New(),
 	}
 }
 
 // IsDuplicate returns true if the ID was already recorded within the TTL window.
-// If not a duplicate, it adds the ID to the cache.
+// If not a duplicate, it adds the ID to the cache. O(1) amortized.
 func (c *DedupCache) IsDuplicate(id string) bool {
 	if id == "" {
 		return false
@@ -42,53 +52,67 @@ func (c *DedupCache) IsDuplicate(id string) bool {
 
 	now := time.Now()
 
-	// Check if already seen
-	if seenTime, exists := c.entries[id]; exists {
-		if now.Sub(seenTime) <= c.window {
+	// Check if already seen and still within TTL window
+	if elem, exists := c.index[id]; exists {
+		entry := elem.Value.(*dedupEntry)
+		if now.Sub(entry.seenTime) <= c.window {
+			// Move to front (most recently seen)
+			entry.seenTime = now
+			c.order.MoveToFront(elem)
 			return true
 		}
+		// Entry expired: remove and re-insert below
+		c.order.Remove(elem)
+		delete(c.index, id)
 	}
 
-	// If cache exceeds capacity, prune expired entries
-	if len(c.entries) >= c.capacity {
-		c.pruneExpiredLocked(now)
-		// If still over capacity, evict random/arbitrary batch
-		if len(c.entries) >= c.capacity {
-			c.evictOldestLocked()
-		}
+	// Evict expired entries from the tail (oldest) — O(1) amortized
+	c.evictExpiredFromTailLocked(now)
+
+	// If still at capacity after evicting expired, remove the oldest entry
+	for c.order.Len() >= c.capacity {
+		c.removeTailLocked()
 	}
 
-	c.entries[id] = now
+	// Insert new entry at front
+	entry := &dedupEntry{id: id, seenTime: now}
+	elem := c.order.PushFront(entry)
+	c.index[id] = elem
+
 	return false
 }
 
-func (c *DedupCache) pruneExpiredLocked(now time.Time) {
-	for k, v := range c.entries {
-		if now.Sub(v) > c.window {
-			delete(c.entries, k)
+// evictExpiredFromTailLocked removes expired entries from the back of the LRU list.
+// Because entries are ordered by recency, once we hit a non-expired entry we can stop.
+func (c *DedupCache) evictExpiredFromTailLocked(now time.Time) {
+	for {
+		tail := c.order.Back()
+		if tail == nil {
+			return
 		}
+		entry := tail.Value.(*dedupEntry)
+		if now.Sub(entry.seenTime) <= c.window {
+			return // Remaining entries are newer; stop
+		}
+		c.order.Remove(tail)
+		delete(c.index, entry.id)
 	}
 }
 
-func (c *DedupCache) evictOldestLocked() {
-	// Evict ~10% of entries when capacity limit is reached
-	count := 0
-	limit := c.capacity / 10
-	if limit == 0 {
-		limit = 1
+// removeTailLocked removes the single oldest entry from the cache.
+func (c *DedupCache) removeTailLocked() {
+	tail := c.order.Back()
+	if tail == nil {
+		return
 	}
-	for k := range c.entries {
-		delete(c.entries, k)
-		count++
-		if count >= limit {
-			break
-		}
-	}
+	entry := tail.Value.(*dedupEntry)
+	c.order.Remove(tail)
+	delete(c.index, entry.id)
 }
 
 // Len returns the current count of cached IDs.
 func (c *DedupCache) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.entries)
+	return c.order.Len()
 }

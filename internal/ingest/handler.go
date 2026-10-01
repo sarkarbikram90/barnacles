@@ -272,7 +272,7 @@ func (h *Handler) ingestEntries(ctx context.Context, entries []logentry.LogEntry
 		}
 
 		if h.hub != nil {
-			h.hub.Broadcast(accepted)
+			h.hub.BroadcastBatch(accepted)
 		}
 	}
 
