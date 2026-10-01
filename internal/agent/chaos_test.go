@@ -56,13 +56,13 @@ type faultMode int
 
 const (
 	faultNone          faultMode = iota
-	faultHTTP503                        // Return 503 Service Unavailable
-	faultHTTP429                        // Return 429 Too Many Requests
-	faultHTTP500                        // Return 500 Internal Server Error
-	faultSlowResponse                   // Respond after a delay
-	faultConnReset                      // Close connection without response
-	faultHTTP400                        // Return 400 Bad Request (permanent, non-retryable)
-	faultRandomLatency                  // Add random latency 0-500ms
+	faultHTTP503                 // Return 503 Service Unavailable
+	faultHTTP429                 // Return 429 Too Many Requests
+	faultHTTP500                 // Return 500 Internal Server Error
+	faultSlowResponse            // Respond after a delay
+	faultConnReset               // Close connection without response
+	faultHTTP400                 // Return 400 Bad Request (permanent, non-retryable)
+	faultRandomLatency           // Add random latency 0-500ms
 )
 
 // faultServer is a controllable HTTP test server that can inject faults.
@@ -573,10 +573,11 @@ func TestFI_CrashBetweenPeekAndCommit_SpoolRecovery(t *testing.T) {
 }
 
 // TestFI_MultiPhasePartition tests a complex multi-phase fault scenario:
-//   Phase 1: Network healthy — deliver 20 events
-//   Phase 2: Network down   — 20 events spool to disk
-//   Phase 3: Network flaky  — 503 errors with intermittent success
-//   Phase 4: Network healed — drain remaining spool
+//
+//	Phase 1: Network healthy — deliver 20 events
+//	Phase 2: Network down   — 20 events spool to disk
+//	Phase 3: Network flaky  — 503 errors with intermittent success
+//	Phase 4: Network healed — drain remaining spool
 //
 // Asserts zero loss and monotonic ordering across all phases.
 func TestFI_MultiPhasePartition(t *testing.T) {
@@ -892,7 +893,7 @@ func TestFI_GracefulShutdownDrainsBufferedEvents(t *testing.T) {
 	_ = os.WriteFile(logPath, []byte(""), 0o600)
 
 	cfg := newTestAgentConfig(fs.server.URL, logPath, spoolDir)
-	cfg.Batch.MaxEvents = 50 // Large batch so events buffer in channel
+	cfg.Batch.MaxEvents = 50                  // Large batch so events buffer in channel
 	cfg.Batch.FlushInterval = 5 * time.Second // Long flush interval
 
 	ag, err := New(cfg, nil)

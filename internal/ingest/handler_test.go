@@ -235,4 +235,3 @@ func TestIngestCompressedZstdAndGzip(t *testing.T) {
 		t.Errorf("expected 400 Bad Request for unsupported encoding, got %d", recBad.Code)
 	}
 }
-

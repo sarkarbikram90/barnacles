@@ -194,4 +194,3 @@ func TestHubBroadcastBatch(t *testing.T) {
 		t.Errorf("expected type 'log_batch', got %s", batchMsg.Type)
 	}
 }
-

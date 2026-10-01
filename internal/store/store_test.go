@@ -376,4 +376,3 @@ func TestLegacyIndexJSONBackwardsCompatibility(t *testing.T) {
 		t.Fatalf("unexpected headers order: %+v", headers)
 	}
 }
-

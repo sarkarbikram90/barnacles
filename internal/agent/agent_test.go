@@ -308,4 +308,3 @@ func TestAgentDeliveryWithZstdCompression(t *testing.T) {
 	cancel()
 	<-agentDone
 }
-
