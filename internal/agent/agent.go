@@ -250,8 +250,16 @@ func (a *Agent) deliverBatch(ctx context.Context, batch []logentry.LogEntry) {
 		return
 	}
 
-	// Try sending directly with a short timeout
-	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Try sending directly with a short timeout. If parent ctx is already cancelled
+	// (during final graceful shutdown flush), allow a 2-second grace timeout so buffered
+	// events are delivered to the server instead of being aborted with context canceled.
+	var sendCtx context.Context
+	var cancel context.CancelFunc
+	if ctx.Err() != nil {
+		sendCtx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+	} else {
+		sendCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	}
 	_, err := a.sender.Send(sendCtx, a.cfg.Agent.ID, batch)
 	cancel()
 
