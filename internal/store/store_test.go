@@ -376,3 +376,198 @@ func TestLegacyIndexJSONBackwardsCompatibility(t *testing.T) {
 		t.Fatalf("unexpected headers order: %+v", headers)
 	}
 }
+
+func TestPartitionSummaryPruning(t *testing.T) {
+	tempDir := t.TempDir()
+	fs, err := NewFileStore(Config{Directory: tempDir})
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	defer fs.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Hour 1: INFO logs only from host-a
+	hour1 := now.Add(-2 * time.Hour)
+	entries1 := []logentry.LogEntry{
+		logentry.New("host-a", "service-1", "INFO", "info log 1", nil),
+		logentry.New("host-a", "service-1", "INFO", "info log 2", nil),
+	}
+	entries1[0].Timestamp = hour1
+	entries1[1].Timestamp = hour1.Add(5 * time.Minute)
+	if err := fs.Append(ctx, entries1); err != nil {
+		t.Fatalf("Append hour 1 failed: %v", err)
+	}
+
+	// Hour 2: ERROR logs from host-b
+	hour2 := now.Add(-1 * time.Hour)
+	entries2 := []logentry.LogEntry{
+		logentry.New("host-b", "service-2", "ERROR", "error log 1", nil),
+	}
+	entries2[0].Timestamp = hour2
+	if err := fs.Append(ctx, entries2); err != nil {
+		t.Fatalf("Append hour 2 failed: %v", err)
+	}
+
+	// Verify partition summaries were constructed
+	fs.mu.RLock()
+	if len(fs.partitionSummaries) != 2 {
+		t.Fatalf("expected 2 partition summaries, got %d", len(fs.partitionSummaries))
+	}
+	fs.mu.RUnlock()
+
+	// Query for ERROR only — should return only entries from hour 2
+	errResults, err := fs.Query(ctx, logentry.Query{Level: "ERROR", Limit: 10})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(errResults) != 1 || errResults[0].Message != "error log 1" {
+		t.Fatalf("unexpected error results: %+v", errResults)
+	}
+
+	// Query for host-a only — should return only entries from hour 1
+	hostResults, err := fs.Query(ctx, logentry.Query{Host: "host-a", Limit: 10})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(hostResults) != 2 {
+		t.Fatalf("expected 2 results for host-a, got %d", len(hostResults))
+	}
+
+	// Query for nonexistent host — should return 0 without scanning blocks
+	emptyResults, err := fs.Query(ctx, logentry.Query{Host: "nonexistent", Limit: 10})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(emptyResults) != 0 {
+		t.Fatalf("expected 0 results for nonexistent host, got %d", len(emptyResults))
+	}
+}
+
+func TestBlockCompaction(t *testing.T) {
+	tempDir := t.TempDir()
+	fs, err := NewFileStore(Config{Directory: tempDir})
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	defer fs.Close()
+
+	ctx := context.Background()
+	baseTime := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+
+	// Append 5 separate small trickle batches in the same hour partition
+	for i := 0; i < 5; i++ {
+		entry := logentry.New("srv-1", "app", "INFO", "trickle log", map[string]string{"batch": string(rune('A' + i))})
+		entry.Timestamp = baseTime.Add(time.Duration(i) * time.Minute)
+		if err := fs.Append(ctx, []logentry.LogEntry{entry}); err != nil {
+			t.Fatalf("Append batch %d failed: %v", i, err)
+		}
+	}
+
+	partitionDir := filepath.Join(tempDir, "2026", "10", "01", "12")
+
+	// Verify 5 blocks exist before compaction
+	fs.mu.RLock()
+	preHeaders := fs.partitionCache[partitionDir]
+	fs.mu.RUnlock()
+	if len(preHeaders) != 5 {
+		t.Fatalf("expected 5 blocks before compaction, got %d", len(preHeaders))
+	}
+
+	// Run compaction: threshold minBlocks=2
+	reduced, freed, err := fs.Compact(ctx, 2)
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+	if reduced != 4 {
+		t.Fatalf("expected 4 blocks reduced (5 -> 1), got %d (freed=%d)", reduced, freed)
+	}
+
+	// Verify only 1 consolidated block remains
+	fs.mu.RLock()
+	postHeaders := fs.partitionCache[partitionDir]
+	fs.mu.RUnlock()
+	if len(postHeaders) != 1 {
+		t.Fatalf("expected 1 block after compaction, got %d", len(postHeaders))
+	}
+
+	// Verify all 5 entries can be queried with complete data fidelity
+	results, err := fs.Query(ctx, logentry.Query{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query after compaction failed: %v", err)
+	}
+	if len(results) != 5 {
+		t.Fatalf("expected 5 entries after compaction, got %d", len(results))
+	}
+}
+
+func TestTieredArchivingAndRestoration(t *testing.T) {
+	tempDir := t.TempDir()
+	storeDir := filepath.Join(tempDir, "store")
+	archiveDir := filepath.Join(tempDir, "archive")
+
+	fs, err := NewFileStore(Config{Directory: storeDir})
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	defer fs.Close()
+
+	archive, err := NewLocalArchiveStore(archiveDir)
+	if err != nil {
+		t.Fatalf("NewLocalArchiveStore failed: %v", err)
+	}
+
+	ctx := context.Background()
+	baseTime := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	entries := []logentry.LogEntry{
+		logentry.New("node-1", "syslog", "INFO", "archive test log 1", nil),
+		logentry.New("node-1", "syslog", "WARN", "archive test log 2", nil),
+	}
+	entries[0].Timestamp = baseTime
+	entries[1].Timestamp = baseTime.Add(10 * time.Minute)
+
+	if err := fs.Append(ctx, entries); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+
+	partitionDir := filepath.Join(storeDir, "2026", "10", "01", "10")
+	archiver := NewTieredArchiver(fs, archive, 1*time.Hour)
+
+	// Archive the partition
+	uploaded, bytesArchived, err := archiver.ArchivePartition(ctx, partitionDir)
+	if err != nil {
+		t.Fatalf("ArchivePartition failed: %v", err)
+	}
+	if uploaded < 2 || bytesArchived <= 0 {
+		t.Fatalf("expected at least 2 files uploaded (block + index), got %d (bytes=%d)",
+			uploaded, bytesArchived)
+	}
+
+	// Create a new clean FileStore to test restoration from object store
+	restoreStoreDir := filepath.Join(tempDir, "restored_store")
+	restoredFs, err := NewFileStore(Config{Directory: restoreStoreDir})
+	if err != nil {
+		t.Fatalf("NewFileStore for restore failed: %v", err)
+	}
+	defer restoredFs.Close()
+
+	restoreArchiver := NewTieredArchiver(restoredFs, archive, 1*time.Hour)
+	restoredCount, restoredBytes, err := restoreArchiver.RestorePartition(ctx, "2026/10/01/10")
+	if err != nil {
+		t.Fatalf("RestorePartition failed: %v", err)
+	}
+	if restoredCount != uploaded || restoredBytes != bytesArchived {
+		t.Fatalf("restoration mismatch: uploaded %d (bytes %d), restored %d (bytes %d)",
+			uploaded, bytesArchived, restoredCount, restoredBytes)
+	}
+
+	// Query restored FileStore
+	restoredEntries, err := restoredFs.Query(ctx, logentry.Query{Limit: 10})
+	if err != nil {
+		t.Fatalf("Query on restored store failed: %v", err)
+	}
+	if len(restoredEntries) != 2 {
+		t.Fatalf("expected 2 restored entries, got %d", len(restoredEntries))
+	}
+}

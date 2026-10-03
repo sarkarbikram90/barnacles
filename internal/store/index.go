@@ -130,3 +130,48 @@ func AppendBlockToPartition(dir string, header BlockHeader, payload []byte, sync
 
 	return nil
 }
+
+// RewritePartitionIndex atomically replaces a partition's index.jsonl with a consolidated set of headers.
+// Used by compaction to update partition metadata after consolidating small blocks into larger blocks.
+func RewritePartitionIndex(dir string, headers []BlockHeader, syncOnWrite bool) error {
+	indexPath := filepath.Join(dir, indexJSONLFileName)
+	tempPath := filepath.Join(dir, "."+indexJSONLFileName+".tmp")
+
+	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create temp index %q: %w", tempPath, err)
+	}
+
+	for _, h := range headers {
+		data, err := json.Marshal(h)
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("marshal header %q: %w", h.ID, err)
+		}
+		data = append(data, '\n')
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("write header to temp index %q: %w", tempPath, err)
+		}
+	}
+
+	if syncOnWrite {
+		_ = f.Sync()
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("close temp index %q: %w", tempPath, err)
+	}
+
+	if err := os.Rename(tempPath, indexPath); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("commit rewritten index %q: %w", indexPath, err)
+	}
+
+	// Clean up legacy index.json if present
+	_ = os.Remove(filepath.Join(dir, indexJSONFileName))
+
+	return nil
+}

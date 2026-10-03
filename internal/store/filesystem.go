@@ -22,18 +22,63 @@ var (
 	ErrStoreClosed = errors.New("log store is closed")
 )
 
+// PartitionSummary contains aggregated multi-dimensional metadata for an hourly partition,
+// enabling O(1) partition pruning across time bounds, severity bitmask, host, and source
+// before reading or decompressing any block headers.
+type PartitionSummary struct {
+	Dir        string
+	MinTime    time.Time
+	MaxTime    time.Time
+	LevelMask  uint16
+	Hosts      map[string]struct{}
+	Sources    map[string]struct{}
+	BlockCount int
+	TotalBytes int64
+}
+
+// MatchesQuery returns false if the partition cannot possibly contain matching log entries.
+func (ps *PartitionSummary) MatchesQuery(q logentry.Query) bool {
+	if ps == nil {
+		return true
+	}
+	if !q.StartTime.IsZero() && !ps.MaxTime.IsZero() && ps.MaxTime.Before(q.StartTime) {
+		return false
+	}
+	if !q.EndTime.IsZero() && !ps.MinTime.IsZero() && ps.MinTime.After(q.EndTime) {
+		return false
+	}
+	if q.Level != "" {
+		bit := LevelToBit(q.Level)
+		if bit != 0 && (ps.LevelMask&bit) == 0 {
+			return false
+		}
+	}
+	if q.Host != "" {
+		if _, ok := ps.Hosts[q.Host]; !ok {
+			return false
+		}
+	}
+	if q.Source != "" {
+		if _, ok := ps.Sources[q.Source]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // FileStore persists log entries into time-segmented Zstandard compressed blocks
-// with partition indexing and block-pruned queries.
+// with partition indexing, partition-level O(1) pruning, compaction, and block-pruned queries.
 type FileStore struct {
 	rootDir     string
 	syncOnWrite bool
 
-	mu             sync.RWMutex
-	closed         bool
-	totalBytes     int64
-	knownHosts     map[string]struct{}
-	knownSrcs      map[string]struct{}
-	partitionCache map[string][]BlockHeader
+	mu                 sync.RWMutex
+	closed             bool
+	totalBytes         int64
+	knownHosts         map[string]struct{}
+	knownSrcs          map[string]struct{}
+	partitionCache     map[string][]BlockHeader
+	partitionSummaries map[string]*PartitionSummary
 }
 
 // Compile-time interface check.
@@ -56,11 +101,12 @@ func NewFileStore(cfg Config) (*FileStore, error) {
 	}
 
 	fsStore := &FileStore{
-		rootDir:        cfg.Directory,
-		syncOnWrite:    cfg.SyncOnWrite,
-		knownHosts:     make(map[string]struct{}),
-		knownSrcs:      make(map[string]struct{}),
-		partitionCache: make(map[string][]BlockHeader),
+		rootDir:            cfg.Directory,
+		syncOnWrite:        cfg.SyncOnWrite,
+		knownHosts:         make(map[string]struct{}),
+		knownSrcs:          make(map[string]struct{}),
+		partitionCache:     make(map[string][]BlockHeader),
+		partitionSummaries: make(map[string]*PartitionSummary),
 	}
 
 	if err := fsStore.scanInitial(); err != nil {
@@ -87,7 +133,7 @@ func (s *FileStore) scanInitial() error {
 			total += info.Size()
 		}
 
-		// Load headers from index to populate known hosts, sources, and partition cache
+		// Load headers from index to populate known hosts, sources, partition cache, and summaries
 		if d.Name() == indexJSONLFileName || d.Name() == indexJSONFileName {
 			dir := filepath.Dir(path)
 			if _, visited := visitedPartitions[dir]; !visited {
@@ -95,6 +141,7 @@ func (s *FileStore) scanInitial() error {
 				headers, err := LoadPartitionIndex(dir)
 				if err == nil {
 					s.partitionCache[dir] = headers
+					s.partitionSummaries[dir] = s.buildPartitionSummaryLocked(dir, headers)
 					for _, h := range headers {
 						for _, host := range h.Hosts {
 							if host != "" {
@@ -180,10 +227,79 @@ func (s *FileStore) Append(ctx context.Context, entries []logentry.LogEntry) err
 		}
 
 		s.partitionCache[dir] = append(s.partitionCache[dir], header)
+		s.updatePartitionSummaryLocked(dir, header)
 		s.totalBytes += header.CompressedBytes
 	}
 
 	return nil
+}
+
+func (s *FileStore) buildPartitionSummaryLocked(dir string, headers []BlockHeader) *PartitionSummary {
+	if len(headers) == 0 {
+		return nil
+	}
+	summary := &PartitionSummary{
+		Dir:        dir,
+		Hosts:      make(map[string]struct{}),
+		Sources:    make(map[string]struct{}),
+		BlockCount: len(headers),
+	}
+	for i, h := range headers {
+		minT := time.Unix(0, h.MinTimestampNano).UTC()
+		maxT := time.Unix(0, h.MaxTimestampNano).UTC()
+		if i == 0 || minT.Before(summary.MinTime) {
+			summary.MinTime = minT
+		}
+		if i == 0 || maxT.After(summary.MaxTime) {
+			summary.MaxTime = maxT
+		}
+		summary.LevelMask |= h.LevelMask
+		summary.TotalBytes += h.CompressedBytes
+		for _, host := range h.Hosts {
+			if host != "" {
+				summary.Hosts[host] = struct{}{}
+			}
+		}
+		for _, src := range h.Sources {
+			if src != "" {
+				summary.Sources[src] = struct{}{}
+			}
+		}
+	}
+	return summary
+}
+
+func (s *FileStore) updatePartitionSummaryLocked(dir string, h BlockHeader) {
+	summary, ok := s.partitionSummaries[dir]
+	if !ok || summary == nil {
+		summary = &PartitionSummary{
+			Dir:     dir,
+			Hosts:   make(map[string]struct{}),
+			Sources: make(map[string]struct{}),
+		}
+		s.partitionSummaries[dir] = summary
+	}
+	minT := time.Unix(0, h.MinTimestampNano).UTC()
+	maxT := time.Unix(0, h.MaxTimestampNano).UTC()
+	if summary.MinTime.IsZero() || minT.Before(summary.MinTime) {
+		summary.MinTime = minT
+	}
+	if summary.MaxTime.IsZero() || maxT.After(summary.MaxTime) {
+		summary.MaxTime = maxT
+	}
+	summary.LevelMask |= h.LevelMask
+	summary.BlockCount++
+	summary.TotalBytes += h.CompressedBytes
+	for _, host := range h.Hosts {
+		if host != "" {
+			summary.Hosts[host] = struct{}{}
+		}
+	}
+	for _, src := range h.Sources {
+		if src != "" {
+			summary.Sources[src] = struct{}{}
+		}
+	}
 }
 
 func (s *FileStore) getPartitionHeaders(dir string) []BlockHeader {
@@ -201,6 +317,7 @@ func (s *FileStore) getPartitionHeaders(dir string) []BlockHeader {
 
 	s.mu.Lock()
 	s.partitionCache[dir] = headers
+	s.partitionSummaries[dir] = s.buildPartitionSummaryLocked(dir, headers)
 	s.mu.Unlock()
 	return headers
 }
@@ -233,6 +350,14 @@ func (s *FileStore) Query(ctx context.Context, q logentry.Query) ([]logentry.Log
 		}
 		if len(matched) >= q.Limit {
 			break
+		}
+
+		// Partition Pruning: skip entire partition in O(1) if summary does not match
+		s.mu.RLock()
+		summary, hasSummary := s.partitionSummaries[dir]
+		s.mu.RUnlock()
+		if hasSummary && summary != nil && !summary.MatchesQuery(q) {
+			continue // Skip entire hourly partition in O(1)!
 		}
 
 		// Read partition index for pre-decompression block pruning (from memory cache or disk)
@@ -571,6 +696,7 @@ func (s *FileStore) cleanEmptyPartitionsLocked() {
 		}
 
 		if !hasData {
+			delete(s.partitionSummaries, path)
 			// Remove orphaned index files
 			for _, idxName := range []string{indexJSONLFileName, indexJSONFileName} {
 				idxPath := filepath.Join(path, idxName)
@@ -601,6 +727,149 @@ func (s *FileStore) cleanEmptyPartitionsLocked() {
 			}
 		}
 	}
+}
+
+// CompactPartition consolidates multiple small blocks in a partition directory
+// into larger, highly compressed Zstandard blocks, resolving the small-file problem.
+// It atomically rewrites index.jsonl and unlinks superseded blocks.
+// Returns the count of blocks reduced and bytes freed.
+func (s *FileStore) CompactPartition(dir string, maxBlockRecords int) (int, int64, error) {
+	if maxBlockRecords <= 0 {
+		maxBlockRecords = 5000
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, 0, ErrStoreClosed
+	}
+
+	headers, ok := s.partitionCache[dir]
+	if !ok || len(headers) < 2 {
+		diskHeaders, err := LoadPartitionIndex(dir)
+		if err != nil || len(diskHeaders) < 2 {
+			return 0, 0, nil
+		}
+		headers = diskHeaders
+	}
+
+	var allEntries []logentry.LogEntry
+	var oldFiles []string
+	var oldBytes int64
+
+	for _, h := range headers {
+		filePath := filepath.Join(dir, h.FileName)
+		oldFiles = append(oldFiles, filePath)
+		oldBytes += h.CompressedBytes
+
+		compressed, err := os.ReadFile(filePath)
+		if err != nil {
+			return 0, 0, fmt.Errorf("read block %s for compaction: %w", h.FileName, err)
+		}
+		entries, err := DecodeBlock(compressed)
+		if err != nil {
+			return 0, 0, fmt.Errorf("decode block %s for compaction: %w", h.FileName, err)
+		}
+		allEntries = append(allEntries, entries...)
+	}
+
+	if len(allEntries) == 0 {
+		return 0, 0, nil
+	}
+
+	var newHeaders []BlockHeader
+	var newFiles []string
+	var newBytes int64
+
+	blockIdx := 0
+	for i := 0; i < len(allEntries); i += maxBlockRecords {
+		end := i + maxBlockRecords
+		if end > len(allEntries) {
+			end = len(allEntries)
+		}
+		chunk := allEntries[i:end]
+
+		header, payload, err := EncodeBlock(chunk)
+		if err != nil {
+			for _, nf := range newFiles {
+				_ = os.Remove(nf)
+			}
+			return 0, 0, fmt.Errorf("encode compacted chunk: %w", err)
+		}
+
+		header.FileName = fmt.Sprintf("compact_%s_%04d.zst", header.ID[:8], blockIdx)
+		newFilePath := filepath.Join(dir, header.FileName)
+
+		if err := os.WriteFile(newFilePath, payload, 0o600); err != nil {
+			for _, nf := range newFiles {
+				_ = os.Remove(nf)
+			}
+			return 0, 0, fmt.Errorf("write compacted block %s: %w", newFilePath, err)
+		}
+
+		newFiles = append(newFiles, newFilePath)
+		newHeaders = append(newHeaders, header)
+		newBytes += header.CompressedBytes
+		blockIdx++
+	}
+
+	if err := RewritePartitionIndex(dir, newHeaders, s.syncOnWrite); err != nil {
+		for _, nf := range newFiles {
+			_ = os.Remove(nf)
+		}
+		return 0, 0, fmt.Errorf("rewrite compacted index: %w", err)
+	}
+
+	for _, oldFile := range oldFiles {
+		_ = os.Remove(oldFile)
+	}
+
+	s.partitionCache[dir] = newHeaders
+	s.partitionSummaries[dir] = s.buildPartitionSummaryLocked(dir, newHeaders)
+	freedBytes := oldBytes - newBytes
+	s.totalBytes -= freedBytes
+
+	blocksReduced := len(headers) - len(newHeaders)
+	return blocksReduced, freedBytes, nil
+}
+
+// Compact scans all partition directories and merges blocks in partitions with at least minBlocks.
+// Returns total blocks reduced and total bytes freed.
+func (s *FileStore) Compact(ctx context.Context, minBlocks int) (int, int64, error) {
+	if minBlocks < 2 {
+		minBlocks = 2
+	}
+
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return 0, 0, ErrStoreClosed
+	}
+
+	var candidateDirs []string
+	for dir, headers := range s.partitionCache {
+		if len(headers) >= minBlocks {
+			candidateDirs = append(candidateDirs, dir)
+		}
+	}
+	s.mu.RUnlock()
+
+	var totalReduced int
+	var totalFreed int64
+
+	for _, dir := range candidateDirs {
+		if ctx.Err() != nil {
+			return totalReduced, totalFreed, ctx.Err()
+		}
+		reduced, freed, err := s.CompactPartition(dir, 5000)
+		if err != nil {
+			return totalReduced, totalFreed, err
+		}
+		totalReduced += reduced
+		totalFreed += freed
+	}
+
+	return totalReduced, totalFreed, nil
 }
 
 // Close closes the file store.

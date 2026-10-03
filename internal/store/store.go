@@ -29,6 +29,10 @@ type LogStore interface {
 	// Prune deletes stored log segments that exceed max age or disk budget.
 	Prune(ctx context.Context, maxAge time.Duration, maxSizeBytes int64) (deletedFiles int, freedBytes int64, err error)
 
+	// Compact merges small blocks in partitions with at least minBlocks into consolidated blocks,
+	// reducing file count and improving compression ratio.
+	Compact(ctx context.Context, minBlocks int) (reducedBlocks int, freedBytes int64, err error)
+
 	// Close flushes buffers and closes any open storage file handles.
 	Close() error
 }

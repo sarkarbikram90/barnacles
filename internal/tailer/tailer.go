@@ -40,6 +40,7 @@ type Tailer struct {
 	cfg       Config
 	linesCh   chan string
 	errCh     chan error
+	wakeCh    chan struct{}
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -63,6 +64,7 @@ func New(ctx context.Context, cfg Config) (*Tailer, error) {
 		cfg:     cfg,
 		linesCh: make(chan string, channelBufferSize),
 		errCh:   make(chan error, 16),
+		wakeCh:  make(chan struct{}, 1),
 		ctx:     tailCtx,
 		cancel:  cancel,
 	}
@@ -81,6 +83,15 @@ func (t *Tailer) Lines() <-chan string {
 // Errors returns the receive-only channel yielding tailer warnings or errors.
 func (t *Tailer) Errors() <-chan error {
 	return t.errCh
+}
+
+// Wakeup signals the tailer to inspect the target file immediately, bypassing
+// the periodic polling sleep interval for sub-millisecond append reaction latency.
+func (t *Tailer) Wakeup() {
+	select {
+	case t.wakeCh <- struct{}{}:
+	default:
+	}
 }
 
 // Close stops the tailer gracefully, waiting for the worker goroutine to terminate.
@@ -139,6 +150,7 @@ func (t *Tailer) run() {
 		case <-t.ctx.Done():
 			return
 		case <-pollTicker.C:
+		case <-t.wakeCh:
 		}
 
 		// If no file currently opened, attempt to open

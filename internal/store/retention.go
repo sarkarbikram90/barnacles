@@ -54,6 +54,14 @@ func (w *RetentionWorker) Start(ctx context.Context) {
 			} else if deleted > 0 {
 				slog.Info("Retention worker pruned logs", "deleted_files", deleted, "freed_bytes", freed)
 			}
+
+			// Background Compaction: consolidate small blocks in fragmented partitions
+			reduced, freedCompact, errCompact := w.store.Compact(ctx, 3)
+			if errCompact != nil {
+				slog.Error("Compaction worker error", "error", errCompact)
+			} else if reduced > 0 {
+				slog.Info("Compaction worker consolidated blocks", "reduced_blocks", reduced, "freed_bytes", freedCompact)
+			}
 		}
 	}
 }

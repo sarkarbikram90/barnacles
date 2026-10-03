@@ -211,3 +211,46 @@ func assertNextLine(t *testing.T, ch <-chan string, expected string) {
 		t.Fatalf("timed out waiting for line %q", expected)
 	}
 }
+
+func TestTailerWakeup(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := filepath.Join(tempDir, "wakeup.log")
+	_ = os.WriteFile(logPath, []byte(""), 0o600)
+
+	// Set a long poll interval (10 seconds) to ensure that the line is read
+	// exclusively via the event-driven Wakeup call rather than the poll ticker.
+	tlr, err := New(context.Background(), Config{
+		Path:          logPath,
+		StartPosition: "beginning",
+		PollInterval:  10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New tailer failed: %v", err)
+	}
+	defer tlr.Close()
+
+	// Append line
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open log file failed: %v", err)
+	}
+	_, _ = f.WriteString("immediate event\n")
+	_ = f.Close()
+
+	// Trigger event-driven Wakeup
+	start := time.Now()
+	tlr.Wakeup()
+
+	select {
+	case line := <-tlr.Lines():
+		if line != "immediate event" {
+			t.Fatalf("unexpected line: %s", line)
+		}
+		duration := time.Since(start)
+		if duration > 2*time.Second {
+			t.Fatalf("wakeup took too long: %v (expected sub-second reaction)", duration)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for line after Wakeup")
+	}
+}

@@ -87,9 +87,12 @@ Barnacles is intentionally designed as a lightweight, operationally simple log a
 - **Crash-Safe Edge File Tailing**: Persistent watermark checkpoints (`device_id`, `file_identity/inode`, `byte_offset`) committed atomically to disk; automatically survives agent crashes, hard reboots, and log file rotations (`app.log` -> `app.log.1`).
 - **Peek -> Send -> Commit Disk Spooling**: Batches are never unlinked before central server ACK. In-flight leases are recovered on crash restart, fsync writes ensure crash durability, and strict FIFO order is preserved across network partitions.
 - **Edge-to-Server Wire Compression**: Payloads are compressed with Zstandard Level 3 (or gzip) prior to HTTP transmission, reducing network egress bandwidth by 70–85% with server-side decompression bomb guards.
-- **Append-Only Block Storage**: Server storage organizes hourly partitions into Zstandard-compressed blocks (level 3) with $O(1)$ append-only `index.jsonl` manifests (and legacy `index.json` backwards compatibility) plus an in-memory index cache, eliminating $O(N)$ write amplification and enabling pre-decompression query pruning by time range and log level bitmasks.
-- **OpenTelemetry Native Ingestion**: Supports standard OTLP/HTTP JSON (`POST /v1/logs`) as well as native Barnacles batches (`POST /api/v1/ingest`) with sliding-window LRU deduplication.
+- **Append-Only Block Storage & Compaction**: Server storage organizes hourly partitions into Zstandard-compressed blocks with $O(1)$ append-only `index.jsonl` manifests and multi-dimensional partition summaries ($O(1)$ time, severity bitmask, host, and source pruning). Background partition compaction merges trickle writes to eliminate small-file fragmentation.
+- **Tiered Cold Storage**: Pluggable `ObjectStore` backend interface and `TieredArchiver` for offloading sealed historical partitions to cloud object stores (S3 / GCS / MinIO) or local archives.
+- **OpenTelemetry Native Ingestion**: Supports standard OTLP/HTTP JSON (`POST /v1/logs`) as well as native Barnacles batches (`POST /api/v1/ingest`) with $O(1)$ LRU sliding-window deduplication.
 - **Flexible Log Parsing**: Built-in parsers for Plain Text, JSON logs, and Named Regexp capture groups, with an auto-detecting parser that preserves unparseable lines.
+- **Event-Driven & Polling Hybrid Tailing**: File tailer supports sub-millisecond event-driven wakeups (`Wakeup()`) with periodic fallback polling.
+- **Fault-Injection Chaos Verified**: 10-scenario chaos harness verifying zero acknowledged loss, per-source FIFO preservation, and crash recovery between `Peek()` and `Commit()`.
 - **High-Throughput WebSocket Streaming**: Batch-oriented WebSocket delivery (`log_batch`) eliminating per-message framing overhead, non-blocking broadcasts with ring buffer recent replay, and slow-client disconnect protection.
 - **Modern Web Dashboard**: Real-time stats, log level coloring, interactive filters (host, source, level, text search), and event inspector modal.
 - **Production Observability**: Full Prometheus metrics endpoints (`/metrics`) and health checks (`/healthz`, `/readyz`) on both Agent and Server.
@@ -200,6 +203,7 @@ All configurations support environment variable substitution (e.g. `${BARNACLES_
 ## 📖 Documentation
 
 - [Architecture & Concurrency Model](docs/architecture.md)
+- [Benchmarks & Performance Profile](docs/benchmarks.md)
 - [Ingestion & WebSocket Protocol](docs/protocol.md)
 - [Configuration Reference](docs/configuration.md)
 - [Operations & Troubleshooting](docs/operations.md)
@@ -214,9 +218,12 @@ All configurations support environment variable substitution (e.g. `${BARNACLES_
 - [x] Zstandard block storage with $O(1)$ append-only `index.jsonl` manifests.
 - [x] Edge-to-server transparent wire compression (`Content-Encoding: zstd` / `gzip`).
 - [x] High-throughput batch-oriented WebSocket streaming (`log_batch`).
+- [x] Multi-dimensional $O(1)$ partition summary pruning and block level filtering.
+- [x] Background partition block compaction (resolving the small-file problem).
+- [x] Long-term object storage tiering abstraction (`ObjectStore` / `TieredArchiver`).
+- [x] Event-driven tailer notification (`Wakeup`) with fallback polling.
+- [x] 10-scenario fault-injection chaos verification suite.
 - [ ] Agent dynamic log discovery via glob patterns (`/var/log/**/*.log`).
-- [ ] Kernel-level file notifications (`inotify` / `ReadDirectoryChangesW`).
-- [ ] Long-term object storage tiering (S3 / GCS / Azure Blob).
 - [ ] Central fleet management & remote Over-The-Air (OTA) configuration.
 
 ---
