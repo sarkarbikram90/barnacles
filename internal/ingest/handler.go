@@ -14,6 +14,7 @@ import (
 	"github.com/sarkarbikram90/barnacles/internal/config"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 	"github.com/sarkarbikram90/barnacles/internal/metrics"
+	"github.com/sarkarbikram90/barnacles/internal/protocol"
 	"github.com/sarkarbikram90/barnacles/internal/store"
 	"github.com/sarkarbikram90/barnacles/internal/stream"
 )
@@ -86,42 +87,64 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
+	contentType := r.Header.Get("Content-Type")
+	isProto := protocol.IsProtobufContentType(contentType)
+	acceptProto := protocol.IsProtobufContentType(r.Header.Get("Accept")) || isProto
+
 	decompressedBody, closeDecompressor, err := decompressReader(r.Body, r.Header.Get("Content-Encoding"))
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.IngestErrorsTotal.Inc()
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+		h.writeResponse(w, http.StatusBadRequest, logentry.IngestResponse{
 			Status: "error",
 			Errors: []string{"decompression error: " + err.Error()},
-		})
+		}, acceptProto)
 		return
 	}
 	defer closeDecompressor()
 
 	var req logentry.IngestRequest
-	if err := json.NewDecoder(io.LimitReader(decompressedBody, 50*1024*1024)).Decode(&req); err != nil {
-		if h.metrics != nil {
-			h.metrics.IngestErrorsTotal.Inc()
+	if isProto {
+		bodyBytes, err := io.ReadAll(io.LimitReader(decompressedBody, 50*1024*1024))
+		if err != nil {
+			if h.metrics != nil {
+				h.metrics.IngestErrorsTotal.Inc()
+			}
+			h.writeResponse(w, http.StatusBadRequest, logentry.IngestResponse{
+				Status: "error",
+				Errors: []string{"read protobuf payload: " + err.Error()},
+			}, acceptProto)
+			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
-			Status: "error",
-			Errors: []string{"invalid JSON payload or body too large: " + err.Error()},
-		})
-		return
+		if err := protocol.UnmarshalIngestRequest(bodyBytes, &req); err != nil {
+			if h.metrics != nil {
+				h.metrics.IngestErrorsTotal.Inc()
+			}
+			h.writeResponse(w, http.StatusBadRequest, logentry.IngestResponse{
+				Status: "error",
+				Errors: []string{"invalid protobuf payload: " + err.Error()},
+			}, acceptProto)
+			return
+		}
+	} else {
+		if err := json.NewDecoder(io.LimitReader(decompressedBody, 50*1024*1024)).Decode(&req); err != nil {
+			if h.metrics != nil {
+				h.metrics.IngestErrorsTotal.Inc()
+			}
+			h.writeResponse(w, http.StatusBadRequest, logentry.IngestResponse{
+				Status: "error",
+				Errors: []string{"invalid JSON payload or body too large: " + err.Error()},
+			}, acceptProto)
+			return
+		}
 	}
 
 	if len(req.Events) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+		h.writeResponse(w, http.StatusOK, logentry.IngestResponse{
 			Status:   "ok",
 			Accepted: 0,
-		})
+		}, acceptProto)
 		return
 	}
 
@@ -129,12 +152,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.metrics != nil {
 			h.metrics.IngestErrorsTotal.Inc()
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+		h.writeResponse(w, http.StatusBadRequest, logentry.IngestResponse{
 			Status: "error",
 			Errors: []string{"batch exceeds maximum allowed event count"},
-		})
+		}, acceptProto)
 		return
 	}
 
@@ -144,23 +165,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	accepted, duplicates, valErrors, err := h.ingestEntries(r.Context(), req.Events, req.AgentID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+		h.writeResponse(w, http.StatusInternalServerError, logentry.IngestResponse{
 			Status: "error",
 			Errors: []string{"storage error: " + err.Error()},
-		})
+		}, acceptProto)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(logentry.IngestResponse{
+	h.writeResponse(w, http.StatusOK, logentry.IngestResponse{
 		Status:     "ok",
 		Accepted:   len(accepted),
 		Duplicates: duplicates,
 		Errors:     valErrors,
-	})
+	}, acceptProto)
+}
+
+func (h *Handler) writeResponse(w http.ResponseWriter, statusCode int, resp logentry.IngestResponse, asProto bool) {
+	if asProto {
+		b, err := protocol.MarshalIngestResponse(&resp)
+		if err == nil {
+			w.Header().Set("Content-Type", protocol.ContentTypeProtobuf)
+			w.WriteHeader(statusCode)
+			_, _ = w.Write(b)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // ServeOTLP handles standard OpenTelemetry OTLP/HTTP POST /v1/logs requests.

@@ -20,6 +20,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
+	"github.com/sarkarbikram90/barnacles/internal/protocol"
 )
 
 // ErrPermanent indicates a non-retryable client error (e.g. 400 Bad Request, 401 Unauthorized).
@@ -33,6 +34,7 @@ type Sender struct {
 	targetURL   string
 	token       string
 	compression string
+	format      string
 	httpClient  *http.Client
 }
 
@@ -43,6 +45,7 @@ type Config struct {
 	Timeout            time.Duration
 	InsecureSkipVerify bool
 	Compression        string // "zstd", "gzip", "none" (default: "zstd")
+	Format             string // "json", "protobuf" (default: "json")
 }
 
 // New creates a new configured Sender.
@@ -81,11 +84,16 @@ func New(cfg Config) (*Sender, error) {
 	}
 
 	compression := strings.ToLower(strings.TrimSpace(cfg.Compression))
+	format := strings.ToLower(strings.TrimSpace(cfg.Format))
+	if format == "" {
+		format = "json"
+	}
 
 	return &Sender{
 		targetURL:   ingestURL,
 		token:       cfg.Token,
 		compression: compression,
+		format:      format,
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   timeout,
@@ -104,9 +112,24 @@ func (s *Sender) Send(ctx context.Context, agentID string, events []logentry.Log
 		Events:  events,
 	}
 
-	bodyBytes, err := json.Marshal(reqPayload)
-	if err != nil {
-		return nil, fmt.Errorf("%w: marshal request payload: %v", ErrPermanent, err)
+	var (
+		bodyBytes   []byte
+		contentType string
+		err         error
+	)
+
+	if s.format == "protobuf" {
+		bodyBytes, err = protocol.MarshalIngestRequest(&reqPayload)
+		if err != nil {
+			return nil, fmt.Errorf("%w: marshal protobuf request: %v", ErrPermanent, err)
+		}
+		contentType = protocol.ContentTypeProtobuf
+	} else {
+		bodyBytes, err = json.Marshal(reqPayload)
+		if err != nil {
+			return nil, fmt.Errorf("%w: marshal request payload: %v", ErrPermanent, err)
+		}
+		contentType = protocol.ContentTypeJSON
 	}
 
 	var reqBody io.Reader = bytes.NewReader(bodyBytes)
@@ -136,7 +159,10 @@ func (s *Sender) Send(ctx context.Context, agentID string, events []logentry.Log
 		return nil, fmt.Errorf("%w: create http request: %v", ErrPermanent, err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	if s.format == "protobuf" {
+		req.Header.Set("Accept", protocol.ContentTypeProtobuf)
+	}
 	if contentEncoding != "" {
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
@@ -159,6 +185,12 @@ func (s *Sender) Send(ctx context.Context, agentID string, events []logentry.Log
 	// Handle status codes
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
 		var ingestResp logentry.IngestResponse
+		if protocol.IsProtobufContentType(resp.Header.Get("Content-Type")) {
+			if err := protocol.UnmarshalIngestResponse(respBody, &ingestResp); err != nil {
+				return &logentry.IngestResponse{Status: "ok", Accepted: len(events)}, nil
+			}
+			return &ingestResp, nil
+		}
 		if err := json.Unmarshal(respBody, &ingestResp); err != nil {
 			return &logentry.IngestResponse{Status: "ok", Accepted: len(events)}, nil
 		}

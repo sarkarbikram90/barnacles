@@ -14,6 +14,7 @@ import (
 	"github.com/sarkarbikram90/barnacles/internal/config"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
 	"github.com/sarkarbikram90/barnacles/internal/metrics"
+	"github.com/sarkarbikram90/barnacles/internal/protocol"
 	"github.com/sarkarbikram90/barnacles/internal/store"
 	"github.com/sarkarbikram90/barnacles/internal/stream"
 )
@@ -233,5 +234,85 @@ func TestIngestCompressedZstdAndGzip(t *testing.T) {
 
 	if recBad.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request for unsupported encoding, got %d", recBad.Code)
+	}
+}
+
+func TestIngestHandlerProtobufWire(t *testing.T) {
+	tempDir := t.TempDir()
+	st, err := store.NewFileStore(store.Config{Directory: tempDir})
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	defer st.Close()
+
+	m := metrics.NewServerMetrics()
+	hub := stream.NewHub(config.StreamSettings{RecentEvents: 100}, nil, m)
+	defer hub.Close()
+
+	cfg := config.IngestSettings{
+		MaxBatchEvents:  100,
+		MaxMessageBytes: 1024 * 1024,
+		DedupWindow:     time.Minute,
+		DedupCapacity:   1000,
+	}
+
+	handler := NewHandler(cfg, st, hub, m)
+
+	events := []logentry.LogEntry{
+		{
+			ID:        "proto-001",
+			Timestamp: time.Now().UTC(),
+			Host:      "srv-proto",
+			Source:    "grpc-gateway",
+			Level:     "INFO",
+			Message:   "binary wire log record 1",
+			Fields:    map[string]string{"env": "test"},
+		},
+		{
+			ID:        "proto-002",
+			Timestamp: time.Now().UTC(),
+			Host:      "srv-proto",
+			Source:    "grpc-gateway",
+			Level:     "WARN",
+			Message:   "binary wire log record 2",
+			Fields:    map[string]string{"env": "test"},
+		},
+	}
+
+	reqPayload := logentry.IngestRequest{
+		AgentID: "agent-proto",
+		Events:  events,
+	}
+
+	protoBytes, err := protocol.MarshalIngestRequest(&reqPayload)
+	if err != nil {
+		t.Fatalf("MarshalIngestRequest failed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest", bytes.NewReader(protoBytes))
+	req.Header.Set("Content-Type", protocol.ContentTypeProtobuf)
+	req.Header.Set("Accept", protocol.ContentTypeProtobuf)
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected HTTP status: %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec.Header().Get("Content-Type") != protocol.ContentTypeProtobuf {
+		t.Errorf("expected Content-Type %s, got %s", protocol.ContentTypeProtobuf, rec.Header().Get("Content-Type"))
+	}
+
+	var resp logentry.IngestResponse
+	if err := protocol.UnmarshalIngestResponse(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal protobuf response: %v", err)
+	}
+
+	if resp.Status != "ok" {
+		t.Errorf("expected status 'ok', got %q", resp.Status)
+	}
+	if resp.Accepted != 2 {
+		t.Errorf("expected 2 accepted events, got %d", resp.Accepted)
 	}
 }

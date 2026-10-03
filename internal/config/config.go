@@ -197,6 +197,7 @@ type ServerTarget struct {
 	Timeout            time.Duration `yaml:"timeout"`
 	InsecureSkipVerify bool          `yaml:"insecure_skip_verify"`
 	Compression        string        `yaml:"compression"`
+	Format             string        `yaml:"format"` // json, protobuf (default: json)
 }
 
 // BatchSettings configures batching before delivery.
@@ -249,6 +250,7 @@ func DefaultAgentConfig() AgentConfig {
 			URL:         "http://localhost:8080",
 			Timeout:     10 * time.Second,
 			Compression: "zstd",
+			Format:      "json",
 		},
 		Batch: BatchSettings{
 			MaxEvents:      500,

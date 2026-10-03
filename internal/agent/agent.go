@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type Agent struct {
 	checkpoints *tailer.CheckpointRegistry
 	logCh       chan logentry.LogEntry
 	tailers     []*tailer.Tailer
+	managers    []*tailer.TailerManager
 	wg          sync.WaitGroup
 }
 
@@ -48,6 +50,7 @@ func New(cfg config.AgentConfig, m *metrics.AgentMetrics) (*Agent, error) {
 		Timeout:            cfg.Server.Timeout,
 		InsecureSkipVerify: cfg.Server.InsecureSkipVerify,
 		Compression:        cfg.Server.Compression,
+		Format:             cfg.Server.Format,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sender: %w", err)
@@ -103,18 +106,35 @@ func (a *Agent) Start(ctx context.Context) error {
 			return fmt.Errorf("create parser for source %q: %w", srcCfg.Name, err)
 		}
 
-		t, err := tailer.New(ctx, tailer.Config{
-			Path:               srcCfg.Path,
-			StartPosition:      srcCfg.StartPosition,
-			CheckpointRegistry: a.checkpoints,
-		})
-		if err != nil {
-			return fmt.Errorf("start tailer for source %q: %w", srcCfg.Name, err)
-		}
-		a.tailers = append(a.tailers, t)
+		if strings.ContainsAny(srcCfg.Path, "*?[]") {
+			mgr, err := tailer.NewManager(ctx, tailer.ManagerConfig{
+				Pattern:            srcCfg.Path,
+				PollInterval:       1 * time.Second,
+				TailerPollInterval: 50 * time.Millisecond,
+				StartPosition:      srcCfg.StartPosition,
+				CheckpointRegistry: a.checkpoints,
+			})
+			if err != nil {
+				return fmt.Errorf("start glob tailer manager for source %q: %w", srcCfg.Name, err)
+			}
+			a.managers = append(a.managers, mgr)
 
-		a.wg.Add(1)
-		go a.tailWorker(ctx, srcCfg.Name, t, p)
+			a.wg.Add(1)
+			go a.managerWorker(ctx, srcCfg.Name, mgr, p)
+		} else {
+			t, err := tailer.New(ctx, tailer.Config{
+				Path:               srcCfg.Path,
+				StartPosition:      srcCfg.StartPosition,
+				CheckpointRegistry: a.checkpoints,
+			})
+			if err != nil {
+				return fmt.Errorf("start tailer for source %q: %w", srcCfg.Name, err)
+			}
+			a.tailers = append(a.tailers, t)
+
+			a.wg.Add(1)
+			go a.tailWorker(ctx, srcCfg.Name, t, p)
+		}
 	}
 
 	// Start batcher / sender worker
@@ -131,9 +151,12 @@ func (a *Agent) Start(ctx context.Context) error {
 	<-ctx.Done()
 	slog.Info("Shutting down Barnacles agent...")
 
-	// Close all tailers to stop producing new lines
+	// Close all single-file tailers and dynamic managers to stop producing new lines
 	for _, t := range a.tailers {
 		_ = t.Close()
+	}
+	for _, mgr := range a.managers {
+		_ = mgr.Close()
 	}
 
 	// Wait for all workers (including in-flight batch flushes) to complete
@@ -175,6 +198,44 @@ func (a *Agent) tailWorker(ctx context.Context, sourceName string, t *tailer.Tai
 				// Preserve unparseable lines as text with ERROR level or fallback
 				entry = logentry.New(a.cfg.Agent.Host, sourceName, "INFO", line, nil)
 			}
+			a.metrics.EventsParsedTotal.WithLabelValues(sourceName).Inc()
+
+			select {
+			case a.logCh <- entry:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (a *Agent) managerWorker(ctx context.Context, sourceName string, mgr *tailer.TailerManager, p parser.Parser) {
+	defer a.wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err, ok := <-mgr.Errors():
+			if !ok {
+				return
+			}
+			slog.Warn("Tailer manager warning", "source", sourceName, "error", err)
+		case lineEvt, ok := <-mgr.Lines():
+			if !ok {
+				return
+			}
+			a.metrics.EventsReadTotal.WithLabelValues(sourceName).Inc()
+
+			entry, err := p.Parse(lineEvt.Text)
+			if err != nil {
+				a.metrics.ParseErrorsTotal.WithLabelValues(sourceName).Inc()
+				entry = logentry.New(a.cfg.Agent.Host, sourceName, "INFO", lineEvt.Text, nil)
+			}
+			if entry.Fields == nil {
+				entry.Fields = make(map[string]string)
+			}
+			entry.Fields["file_path"] = lineEvt.Path
 			a.metrics.EventsParsedTotal.WithLabelValues(sourceName).Inc()
 
 			select {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/sarkarbikram90/barnacles/internal/logentry"
+	"github.com/sarkarbikram90/barnacles/internal/protocol"
 )
 
 func decodeBody(r *http.Request) (logentry.IngestRequest, error) {
@@ -225,5 +226,72 @@ func TestCalculateBackoff(t *testing.T) {
 		if b > max {
 			t.Errorf("backoff %v exceeded max %v", b, max)
 		}
+	}
+}
+
+func TestSenderProtobufFormat(t *testing.T) {
+	var (
+		receivedContentType string
+		receivedAccept      string
+		receivedReq         logentry.IngestRequest
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedContentType = r.Header.Get("Content-Type")
+		receivedAccept = r.Header.Get("Accept")
+
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := protocol.UnmarshalIngestRequest(bodyBytes, &receivedReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		resp := logentry.IngestResponse{
+			Status:   "ok",
+			Accepted: len(receivedReq.Events),
+		}
+		respBytes, _ := protocol.MarshalIngestResponse(&resp)
+		w.Header().Set("Content-Type", protocol.ContentTypeProtobuf)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(respBytes)
+	}))
+	defer srv.Close()
+
+	snd, err := New(Config{
+		URL:         srv.URL,
+		Format:      "protobuf",
+		Compression: "none",
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	events := []logentry.LogEntry{
+		logentry.New("host1", "source1", "INFO", "hello proto", map[string]string{"k": "v"}),
+	}
+
+	resp, err := snd.Send(context.Background(), "agent-pb", events)
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	if resp.Accepted != 1 {
+		t.Errorf("expected 1 accepted, got %d", resp.Accepted)
+	}
+	if receivedContentType != protocol.ContentTypeProtobuf {
+		t.Errorf("expected Content-Type %s, got %s", protocol.ContentTypeProtobuf, receivedContentType)
+	}
+	if receivedAccept != protocol.ContentTypeProtobuf {
+		t.Errorf("expected Accept %s, got %s", protocol.ContentTypeProtobuf, receivedAccept)
+	}
+	if receivedReq.AgentID != "agent-pb" {
+		t.Errorf("expected AgentID 'agent-pb', got %s", receivedReq.AgentID)
+	}
+	if len(receivedReq.Events) != 1 || receivedReq.Events[0].Message != "hello proto" {
+		t.Errorf("received events mismatch: %+v", receivedReq.Events)
 	}
 }

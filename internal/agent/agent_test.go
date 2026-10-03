@@ -311,3 +311,88 @@ func TestAgentDeliveryWithZstdCompression(t *testing.T) {
 	<-agentDone
 	time.Sleep(30 * time.Millisecond)
 }
+
+func TestAgentGlobDiscovery(t *testing.T) {
+	var (
+		receivedTotal atomic.Int64
+		receivedLock  sync.Mutex
+		receivedPaths []string
+		receivedMsgs  []string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req logentry.IngestRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		receivedTotal.Add(int64(len(req.Events)))
+
+		receivedLock.Lock()
+		for _, e := range req.Events {
+			receivedMsgs = append(receivedMsgs, e.Message)
+			if e.Fields != nil {
+				receivedPaths = append(receivedPaths, e.Fields["file_path"])
+			}
+		}
+		receivedLock.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(logentry.IngestResponse{Status: "ok", Accepted: len(req.Events)})
+	}))
+	defer srv.Close()
+
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "services", "worker")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	file1 := filepath.Join(tempDir, "app.log")
+	file2 := filepath.Join(subDir, "worker.log")
+
+	_ = os.WriteFile(file1, []byte("app event 1\n"), 0o600)
+	_ = os.WriteFile(file2, []byte("worker event 1\n"), 0o600)
+
+	pattern := filepath.ToSlash(filepath.Join(tempDir, "**/*.log"))
+
+	cfg := config.AgentConfig{
+		Agent: config.AgentSettings{ID: "glob-agent", Host: "host-glob"},
+		Server: config.ServerTarget{
+			URL:     srv.URL,
+			Timeout: 2 * time.Second,
+		},
+		Batch: config.BatchSettings{
+			MaxEvents:     2,
+			FlushInterval: 50 * time.Millisecond,
+		},
+		Sources: []config.SourceConfig{
+			{Name: "multi-log", Path: pattern, Format: "text", StartPosition: "beginning"},
+		},
+	}
+
+	ag, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New(agent) failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	agentDone := make(chan error, 1)
+	go func() {
+		agentDone <- ag.Start(ctx)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for receivedTotal.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if receivedTotal.Load() < 2 {
+		t.Fatalf("expected 2 events received via glob tailing, got %d", receivedTotal.Load())
+	}
+
+	receivedLock.Lock()
+	if len(receivedPaths) < 2 {
+		t.Errorf("expected file_path metadata on delivered events, got: %v", receivedPaths)
+	}
+	receivedLock.Unlock()
+
+	stopAgent(cancel, agentDone)
+}
