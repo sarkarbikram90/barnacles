@@ -239,6 +239,14 @@ func assertNoLoss(t *testing.T, seqs []int, expectedStart, expectedEnd int) {
 	}
 }
 
+// stopAgent cancels the agent context, waits for shutdown, and grants a brief pause
+// allowing Windows NTFS to finalize directory entry unlinks before test cleanup.
+func stopAgent(cancel context.CancelFunc, done <-chan error) {
+	cancel()
+	<-done
+	time.Sleep(30 * time.Millisecond)
+}
+
 // =============================================================================
 // Fault-Injection Test Cases
 // =============================================================================
@@ -288,8 +296,7 @@ func TestFI_NetworkPartitionAndRecovery(t *testing.T) {
 	// Invariant 2: FIFO ordering
 	assertStrictFIFO(t, seqs)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_IntermittentHTTP500 simulates a server returning 500s intermittently,
@@ -344,8 +351,7 @@ func TestFI_IntermittentHTTP500(t *testing.T) {
 		t.Logf("Server handled %d requests (some failed, some retried)", reqNum.Load())
 	}
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_ConnectionResetRecovery simulates the server abruptly closing TCP
@@ -387,8 +393,7 @@ func TestFI_ConnectionResetRecovery(t *testing.T) {
 	assertNoLoss(t, seqs, 0, 15)
 	assertStrictFIFO(t, seqs)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_HTTP429RateLimitWithBackoff verifies that the agent respects 429
@@ -433,8 +438,7 @@ func TestFI_HTTP429RateLimitWithBackoff(t *testing.T) {
 	seqs := fs.getSeqs()
 	assertNoLoss(t, seqs, 0, 10)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_CrashBetweenPeekAndCommit_SpoolRecovery simulates the hardest crash
@@ -619,8 +623,7 @@ func TestFI_MultiPhasePartition(t *testing.T) {
 	assertNoLoss(t, seqs, 0, 60)
 	assertStrictFIFO(t, seqs)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_SlowServerDoesNotBlockAgent tests that a very slow server response
@@ -662,8 +665,7 @@ func TestFI_SlowServerDoesNotBlockAgent(t *testing.T) {
 	seqs := fs.getSeqs()
 	assertNoLoss(t, seqs, 0, 10)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_SpoolCrashRecoveryPreservesInFlightFile directly tests the spool
@@ -862,8 +864,7 @@ func TestFI_HighVolumeUnderRandomLatency(t *testing.T) {
 	seqs := fs.getSeqs()
 	assertNoLoss(t, seqs, 0, totalEvents)
 
-	cancel()
-	<-done
+	stopAgent(cancel, done)
 }
 
 // TestFI_GracefulShutdownDrainsBufferedEvents verifies that when the agent

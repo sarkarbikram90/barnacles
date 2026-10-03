@@ -134,6 +134,7 @@ func TestAgentCollectionAndDelivery(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("agent shutdown timed out")
 	}
+	time.Sleep(30 * time.Millisecond)
 }
 
 func TestAgentSpoolAndDrainOnOutage(t *testing.T) {
@@ -226,6 +227,7 @@ func TestAgentSpoolAndDrainOnOutage(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("shutdown timed out")
 	}
+	time.Sleep(30 * time.Millisecond)
 }
 
 func TestAgentDeliveryWithZstdCompression(t *testing.T) {
@@ -307,4 +309,5 @@ func TestAgentDeliveryWithZstdCompression(t *testing.T) {
 
 	cancel()
 	<-agentDone
+	time.Sleep(30 * time.Millisecond)
 }

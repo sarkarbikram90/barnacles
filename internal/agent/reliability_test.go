@@ -160,6 +160,7 @@ func TestStrictFIFODrainUnderOutageAndLiveTraffic(t *testing.T) {
 
 	cancel()
 	<-agentDone
+	time.Sleep(30 * time.Millisecond)
 }
 
 // TestCrashDuringHTTPRequestBeforeACK tests that if an agent crashes while an HTTP
@@ -272,6 +273,7 @@ func TestCrashDuringHTTPRequestBeforeACK(t *testing.T) {
 	}
 
 	cancel2()
+	time.Sleep(50 * time.Millisecond)
 
 	// Invariant Check: exactly 3 unique events in storage, zero duplicate records persisted!
 	entries, err = fsStore.Query(context.Background(), logentry.Query{Limit: 10})
@@ -389,6 +391,7 @@ func TestCrashDuringRotationWithCheckpoints(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("timed out waiting for ag2 to shut down")
 	}
+	time.Sleep(30 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
